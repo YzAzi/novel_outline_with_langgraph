@@ -26,6 +26,12 @@ export interface StoryProject {
   updated_at: string
 }
 
+export interface ProjectSummary {
+  id: string
+  title: string
+  updated_at: string
+}
+
 export interface CreateOutlineRequest {
   world_view: string
   style_tags: string[]

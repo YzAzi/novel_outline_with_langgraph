@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react"
 
 import { CreateDialog } from "@/components/create-dialog"
+import { CharacterGraph } from "@/components/character-graph"
+import { ProjectList } from "@/components/project-list"
 import { NodeEditor } from "@/components/node-editor"
 import { StoryVisualizer } from "@/components/story-visualizer"
 import { Button } from "@/components/ui/button"
@@ -14,14 +16,27 @@ import { useProjectStore } from "@/src/stores/project-store"
 const DEFAULT_TITLE = "未命名项目"
 
 export default function Home() {
-  const { currentProject, isLoading, error, setError, setProject } = useProjectStore()
+  const {
+    currentProject,
+    isLoading,
+    error,
+    loadProjects,
+    saveStatus,
+    setError,
+    setProject,
+  } = useProjectStore()
   const [layoutDirection, setLayoutDirection] = useState<"horizontal" | "vertical">("horizontal")
   const [activeTab, setActiveTab] = useState("outline")
   const [title, setTitle] = useState(DEFAULT_TITLE)
+  const [drawerOpen, setDrawerOpen] = useState(false)
 
   useEffect(() => {
     setTitle(currentProject?.title ?? DEFAULT_TITLE)
   }, [currentProject])
+
+  useEffect(() => {
+    loadProjects()
+  }, [loadProjects])
 
   useEffect(() => {
     const updateDirection = () => {
@@ -43,6 +58,14 @@ export default function Home() {
     <div className="flex min-h-screen flex-col bg-zinc-50">
       <header className="border-b bg-white/80 backdrop-blur">
         <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-3 px-4 py-4 lg:flex-nowrap">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9"
+            onClick={() => setDrawerOpen(true)}
+          >
+            ☰
+          </Button>
           <div className="flex min-w-[220px] flex-1 items-center gap-2">
             <Input
               value={title}
@@ -52,6 +75,13 @@ export default function Home() {
             <Button variant="ghost" size="sm">
               保存
             </Button>
+            <div className="text-xs text-muted-foreground">
+              {saveStatus === "saving"
+                ? "保存中..."
+                : saveStatus === "saved"
+                  ? "已保存"
+                  : null}
+            </div>
           </div>
           <div className="flex flex-1 items-center justify-between gap-3 lg:justify-end">
             <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -72,9 +102,7 @@ export default function Home() {
               {activeTab === "outline" ? (
                 <StoryVisualizer />
               ) : (
-                <div className="flex h-full items-center justify-center rounded-xl border border-dashed bg-white text-sm text-muted-foreground">
-                  角色关系视图即将上线。
-                </div>
+                <CharacterGraph />
               )}
             </div>
           </ResizablePanel>
@@ -101,6 +129,28 @@ export default function Home() {
           <Button variant="ghost" size="sm" onClick={() => setError(null)}>
             关闭
           </Button>
+        </div>
+      ) : null}
+
+      {drawerOpen ? (
+        <div className="fixed inset-0 z-40">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setDrawerOpen(false)}
+          />
+          <aside className="absolute left-0 top-0 h-full w-80 bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <div className="text-sm font-semibold">项目列表</div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setDrawerOpen(false)}
+              >
+                关闭
+              </Button>
+            </div>
+            <ProjectList />
+          </aside>
         </div>
       ) : null}
     </div>

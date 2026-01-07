@@ -175,6 +175,22 @@ class HealthResponse(BaseModel):
     )
 
 
+class ProjectSummary(BaseModel):
+    id: str
+    title: str
+    updated_at: datetime
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "id": "p-001",
+                "title": "雾城谜案",
+                "updated_at": "2024-04-01T12:00:00Z",
+            }
+        }
+    )
+
+
 class TimelineUpdate(BaseModel):
     node_id: str
     new_timeline_order: float

@@ -1,47 +1,143 @@
 "use client"
 
 import { useState } from "react"
+import { useForm } from "react-hook-form"
+import { z } from "zod"
+import { zodResolver } from "@hookform/resolvers/zod"
 
+import { createOutline } from "@/src/lib/api"
+import { useProjectStore } from "@/src/stores/project-store"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 
+const formSchema = z.object({
+  worldView: z.string().trim().min(1, "请填写世界观设定"),
+  styleTags: z.string().trim().optional(),
+  initialPrompt: z.string().trim().optional(),
+})
+
+type FormValues = z.infer<typeof formSchema>
+
 export function CreateDialog() {
   const [open, setOpen] = useState(false)
+  const { isLoading, loadProjects, setProject } = useProjectStore()
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+    reset,
+  } = useForm<FormValues>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      worldView: "",
+      styleTags: "",
+      initialPrompt: "",
+    },
+  })
+
+  const onSubmit = async (values: FormValues) => {
+    const tags = values.styleTags
+      ? values.styleTags
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+      : []
+
+    const payload = {
+      world_view: values.worldView.trim(),
+      style_tags: tags,
+      initial_prompt: values.initialPrompt?.trim() ?? "",
+    }
+
+    try {
+      const project = await createOutline(payload)
+      setProject(project)
+      await loadProjects()
+      setOpen(false)
+      reset()
+    } catch {
+      // Error state is handled in the store and surfaced by the page shell.
+    }
+  }
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen)
+    if (!nextOpen) {
+      reset()
+    }
+  }
+
+  const submitting = isSubmitting || isLoading
 
   return (
-    <>
-      <Button onClick={() => setOpen(true)}>新建大纲</Button>
-      {open ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4">
-          <Card className="w-full max-w-lg">
-            <CardHeader>
-              <CardTitle>新建大纲</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-1">
-                <p className="text-sm font-medium">项目标题</p>
-                <Input placeholder="输入项目名称" />
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm font-medium">世界观</p>
-                <Textarea placeholder="描述世界观设定" rows={3} />
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm font-medium">用户需求</p>
-                <Textarea placeholder="输入故事起始需求" rows={3} />
-              </div>
-            </CardContent>
-            <CardFooter className="justify-end gap-2">
-              <Button variant="ghost" onClick={() => setOpen(false)}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>
+        <Button>新建大纲</Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>新建大纲</DialogTitle>
+          <DialogDescription>填写关键信息，让系统生成故事大纲。</DialogDescription>
+        </DialogHeader>
+        <form className="space-y-4" onSubmit={handleSubmit(onSubmit)}>
+          <div className="space-y-1">
+            <label className="text-sm font-medium" htmlFor="worldView">
+              世界观
+            </label>
+            <Textarea
+              id="worldView"
+              placeholder="例：人类在漂浮群岛上生活，能源来自失落的星核。"
+              rows={4}
+              {...register("worldView")}
+            />
+            {errors.worldView ? (
+              <p className="text-sm text-red-600">{errors.worldView.message}</p>
+            ) : null}
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium" htmlFor="styleTags">
+              风格标签
+            </label>
+            <Input
+              id="styleTags"
+              placeholder="悬疑, 非线性叙事"
+              {...register("styleTags")}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium" htmlFor="initialPrompt">
+              初始想法
+            </label>
+            <Textarea
+              id="initialPrompt"
+              placeholder="例如：女主在旧报纸里发现父亲失踪的线索。"
+              rows={3}
+              {...register("initialPrompt")}
+            />
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <DialogClose asChild>
+              <Button type="button" variant="ghost" disabled={submitting}>
                 取消
               </Button>
-              <Button onClick={() => setOpen(false)}>生成</Button>
-            </CardFooter>
-          </Card>
-        </div>
-      ) : null}
-    </>
+            </DialogClose>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "生成中..." : "生成大纲"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
