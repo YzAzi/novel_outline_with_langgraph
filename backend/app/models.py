@@ -1,0 +1,230 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from uuid import uuid4
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+class StoryNode(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    title: str
+    content: str
+    narrative_order: int
+    timeline_order: float
+    location_tag: str
+    characters: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "id": "d0a9e241-4d4a-4b14-9e76-78a0e8c1a9f6",
+                "title": "失踪的线索",
+                "content": "主角在旧档案中发现一份被刻意遮盖的报告。",
+                "narrative_order": 1,
+                "timeline_order": 1.0,
+                "location_tag": "主线",
+                "characters": ["c-001", "c-002"],
+            }
+        }
+    )
+
+    @field_validator("narrative_order")
+    @classmethod
+    def narrative_order_starts_from_one(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("narrative_order must be >= 1")
+        return value
+
+    @field_validator("timeline_order")
+    @classmethod
+    def timeline_order_positive(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("timeline_order must be > 0")
+        return value
+
+
+class CharacterProfile(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    name: str
+    tags: list[str] = Field(default_factory=list)
+    bio: str
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "id": "c-001",
+                "name": "陆沉",
+                "tags": ["冷静", "复仇者"],
+                "bio": "失去家人的侦探，在城市阴影中追索真相。",
+            }
+        }
+    )
+
+    @field_validator("bio")
+    @classmethod
+    def bio_length_limit(cls, value: str) -> str:
+        if len(value) > 100:
+            raise ValueError("bio must be within 100 characters")
+        return value
+
+
+class StoryProject(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    title: str
+    world_view: str
+    style_tags: list[str] = Field(default_factory=list)
+    nodes: list[StoryNode] = Field(default_factory=list)
+    characters: list[CharacterProfile] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "id": "p-001",
+                "title": "雾城谜案",
+                "world_view": "灰雾笼罩的港城，信息被财团垄断。",
+                "style_tags": ["悬疑", "非线性叙事"],
+                "nodes": [
+                    {
+                        "id": "d0a9e241-4d4a-4b14-9e76-78a0e8c1a9f6",
+                        "title": "失踪的线索",
+                        "content": "主角在旧档案中发现一份被刻意遮盖的报告。",
+                        "narrative_order": 1,
+                        "timeline_order": 1.0,
+                        "location_tag": "主线",
+                        "characters": ["c-001", "c-002"],
+                    }
+                ],
+                "characters": [
+                    {
+                        "id": "c-001",
+                        "name": "陆沉",
+                        "tags": ["冷静", "复仇者"],
+                        "bio": "失去家人的侦探，在城市阴影中追索真相。",
+                    }
+                ],
+                "created_at": "2024-04-01T12:00:00Z",
+                "updated_at": "2024-04-01T12:00:00Z",
+            }
+        }
+    )
+
+    @model_validator(mode="after")
+    def normalize_timestamps(self) -> "StoryProject":
+        if self.updated_at < self.created_at:
+            self.updated_at = self.created_at
+        return self
+
+
+class CreateOutlineRequest(BaseModel):
+    world_view: str
+    style_tags: list[str] = Field(default_factory=list)
+    initial_prompt: str
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "world_view": "灰雾笼罩的港城，信息被财团垄断。",
+                "style_tags": ["悬疑", "非线性叙事"],
+                "initial_prompt": "主角收到一封来自失踪姐姐的信。",
+            }
+        }
+    )
+
+    @field_validator("style_tags", mode="before")
+    @classmethod
+    def normalize_style_tags(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [tag.strip() for tag in value.split(",") if tag.strip()]
+        return value
+
+
+class SyncNodeRequest(BaseModel):
+    project_id: str
+    node: StoryNode
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "project_id": "p-001",
+                "node": {
+                    "id": "d0a9e241-4d4a-4b14-9e76-78a0e8c1a9f6",
+                    "title": "失踪的线索",
+                    "content": "主角在旧档案中发现一份被刻意遮盖的报告。",
+                    "narrative_order": 1,
+                    "timeline_order": 1.0,
+                    "location_tag": "主线",
+                    "characters": ["c-001", "c-002"],
+                },
+            }
+        }
+    )
+
+
+class HealthResponse(BaseModel):
+    status: str
+    version: str
+
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"status": "ok", "version": "0.1.0"}}
+    )
+
+
+class TimelineUpdate(BaseModel):
+    node_id: str
+    new_timeline_order: float
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {"node_id": "d0a9e241-4d4a-4b14-9e76-78a0e8c1a9f6", "new_timeline_order": 2.5}
+        }
+    )
+
+
+class ConflictRecord(BaseModel):
+    description: str
+    affected_nodes: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "description": "节点时间线与既有事件冲突。",
+                "affected_nodes": ["d0a9e241-4d4a-4b14-9e76-78a0e8c1a9f6"],
+            }
+        }
+    )
+
+
+class SyncAnalysisResult(BaseModel):
+    new_characters: list[CharacterProfile] = Field(default_factory=list)
+    timeline_updates: list[TimelineUpdate] = Field(default_factory=list)
+    conflicts: list[ConflictRecord] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "new_characters": [
+                    {
+                        "id": "c-003",
+                        "name": "秦岚",
+                        "tags": ["敏锐", "记者"],
+                        "bio": "追踪财团内幕的调查记者，嗅觉灵敏。",
+                    }
+                ],
+                "timeline_updates": [
+                    {"node_id": "d0a9e241-4d4a-4b14-9e76-78a0e8c1a9f6", "new_timeline_order": 2.0}
+                ],
+                "conflicts": [
+                    {
+                        "description": "新节点暗示事件发生在此前节点之前。",
+                        "affected_nodes": ["d0a9e241-4d4a-4b14-9e76-78a0e8c1a9f6"],
+                    }
+                ],
+            }
+        }
+    )
