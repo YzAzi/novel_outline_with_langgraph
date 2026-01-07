@@ -1,0 +1,292 @@
+"use client"
+
+import { useCallback, useEffect, useState } from "react"
+
+import type { IndexSnapshot, SnapshotType, VersionDiff } from "@/src/types/models"
+import {
+  compareVersions,
+  createVersion,
+  deleteVersion,
+  getVersionSnapshot,
+  listVersions,
+  restoreVersion,
+  updateVersion,
+} from "@/src/lib/api"
+import { useProjectStore } from "@/src/stores/project-store"
+import { Button } from "@/components/ui/button"
+import { VersionDiff } from "@/components/version-diff"
+
+type VersionHistoryProps = {
+  open: boolean
+  onClose: () => void
+}
+
+const TYPE_STYLES: Record<SnapshotType, string> = {
+  auto: "bg-slate-100 text-slate-500",
+  manual: "bg-blue-100 text-blue-700",
+  milestone: "bg-amber-100 text-amber-700",
+  pre_sync: "bg-purple-100 text-purple-700",
+}
+
+export function VersionHistory({ open, onClose }: VersionHistoryProps) {
+  const { currentProject, setError, setProject } = useProjectStore()
+  const [versions, setVersions] = useState<Array<{
+    version: number
+    snapshot_type: SnapshotType
+    name: string | null
+    description: string | null
+    node_count: number
+    words_added?: number
+    words_removed?: number
+    created_at: string
+  }>>([])
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null)
+  const [baseVersion, setBaseVersion] = useState<number | null>(null)
+  const [snapshotCache, setSnapshotCache] = useState<Record<number, IndexSnapshot>>({})
+  const [diff, setDiff] = useState<VersionDiff | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+
+  const loadVersions = useCallback(async () => {
+    if (!currentProject) {
+      return
+    }
+    setIsLoading(true)
+    try {
+      const list = await listVersions(currentProject.id)
+      setVersions(
+        list.map((item) => ({
+          version: item.version,
+          snapshot_type: item.snapshot_type as SnapshotType,
+          name: item.name,
+          description: item.description ?? null,
+          node_count: item.node_count,
+          created_at: item.created_at,
+        }))
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "加载版本失败"
+      setError(message)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [currentProject, setError])
+
+  useEffect(() => {
+    if (open) {
+      loadVersions()
+    }
+  }, [loadVersions, open])
+
+  useEffect(() => {
+    if (!open) {
+      setDiff(null)
+      setSelectedVersion(null)
+      setBaseVersion(null)
+    }
+  }, [open])
+
+  const handleSelect = useCallback(
+    async (version: number) => {
+      if (!currentProject) {
+        return
+      }
+      try {
+        setSelectedVersion(version)
+        const list = versions
+          .map((item) => item.version)
+          .sort((a, b) => a - b)
+        const base = list.find((item) => item < version) ?? list[0] ?? version
+        setBaseVersion(base)
+
+        const snapshot = snapshotCache[version]
+        const baseSnapshot = snapshotCache[base]
+        if (!snapshot) {
+          const loaded = await getVersionSnapshot(currentProject.id, version)
+          setSnapshotCache((prev) => ({ ...prev, [version]: loaded }))
+        }
+        if (!baseSnapshot) {
+          const loaded = await getVersionSnapshot(currentProject.id, base)
+          setSnapshotCache((prev) => ({ ...prev, [base]: loaded }))
+        }
+        const computed = await compareVersions(currentProject.id, base, version)
+        setDiff(computed)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "加载版本差异失败"
+        setError(message)
+      }
+    },
+    [currentProject, setError, snapshotCache, versions]
+  )
+
+  const selectedSnapshot = selectedVersion ? snapshotCache[selectedVersion] ?? null : null
+  const baseSnapshot = baseVersion ? snapshotCache[baseVersion] ?? null : null
+
+  const handleCreateSnapshot = async () => {
+    if (!currentProject) {
+      return
+    }
+    const name = window.prompt("快照名称", "手动快照")
+    if (name === null) {
+      return
+    }
+    try {
+      await createVersion(currentProject.id, { name, type: "manual" })
+      loadVersions()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "创建快照失败"
+      setError(message)
+    }
+  }
+
+  const handleRestore = async () => {
+    if (!currentProject || selectedVersion === null) {
+      return
+    }
+    const confirmed = window.confirm(`确认恢复到版本 v${selectedVersion} 吗？`)
+    if (!confirmed) {
+      return
+    }
+    try {
+      const restored = await restoreVersion(currentProject.id, selectedVersion)
+      setProject(restored)
+      onClose()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "恢复版本失败"
+      setError(message)
+    }
+  }
+
+  const handlePromote = async () => {
+    if (!currentProject || selectedVersion === null) {
+      return
+    }
+    try {
+      await updateVersion(currentProject.id, selectedVersion, {
+        promote_to_milestone: true,
+      })
+      loadVersions()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "更新版本失败"
+      setError(message)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!currentProject || selectedVersion === null) {
+      return
+    }
+    const confirmed = window.confirm(`确认删除版本 v${selectedVersion} 吗？`)
+    if (!confirmed) {
+      return
+    }
+    try {
+      await deleteVersion(currentProject.id, selectedVersion)
+      setSelectedVersion(null)
+      setDiff(null)
+      loadVersions()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "删除版本失败"
+      setError(message)
+    }
+  }
+
+  if (!open) {
+    return null
+  }
+
+  return (
+    <div className="fixed inset-0 z-40">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <aside className="absolute right-0 top-0 h-full w-[880px] max-w-[95vw] bg-slate-50 shadow-xl">
+        <div className="flex items-center justify-between border-b bg-white px-4 py-3">
+          <div className="text-sm font-semibold">版本历史</div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={handleCreateSnapshot}>
+              创建快照
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onClose}>
+              关闭
+            </Button>
+          </div>
+        </div>
+        <div className="grid h-[calc(100%-56px)] gap-4 p-4 lg:grid-cols-[300px_1fr]">
+          <div className="flex flex-col overflow-hidden rounded-xl border bg-white">
+            <div className="border-b px-4 py-3 text-xs font-semibold text-slate-600">
+              版本列表
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {isLoading ? (
+                <div className="px-4 py-6 text-xs text-muted-foreground">
+                  加载中...
+                </div>
+              ) : versions.length === 0 ? (
+                <div className="px-4 py-6 text-xs text-muted-foreground">
+                  暂无版本快照
+                </div>
+              ) : (
+                <div className="divide-y">
+                  {versions.map((item) => (
+                    <button
+                      key={item.version}
+                      type="button"
+                      className={`w-full px-4 py-3 text-left ${
+                        selectedVersion === item.version ? "bg-blue-50" : ""
+                      }`}
+                      onClick={() => handleSelect(item.version)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-semibold">
+                          v{item.version} {item.name ?? ""}
+                        </div>
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] ${TYPE_STYLES[item.snapshot_type]}`}>
+                          {item.snapshot_type}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-500">
+                        {new Date(item.created_at).toLocaleString()}
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-500">
+                        节点：{item.node_count}｜字数变化：
+                        {item.words_added != null || item.words_removed != null
+                          ? `+${item.words_added ?? 0} / -${item.words_removed ?? 0}`
+                          : "--"}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-white px-4 py-3 text-xs">
+              <div>
+                {selectedVersion ? (
+                  <>
+                    <span className="font-semibold">选中版本：</span>
+                    v{selectedVersion}
+                  </>
+                ) : (
+                  <span className="text-muted-foreground">请选择一个版本</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={handleRestore} disabled={!selectedVersion}>
+                  恢复到此版本
+                </Button>
+                <Button size="sm" variant="outline" onClick={handlePromote} disabled={!selectedVersion}>
+                  标记为里程碑
+                </Button>
+                <Button size="sm" variant="ghost" onClick={handleDelete} disabled={!selectedVersion}>
+                  删除
+                </Button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              <VersionDiff base={baseSnapshot} target={selectedSnapshot} diff={diff} />
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  )
+}

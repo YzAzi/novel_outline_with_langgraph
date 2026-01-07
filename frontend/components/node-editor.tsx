@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 
-import type { StoryNode } from "@/src/types/models"
+import type { Conflict, StoryNode } from "@/src/types/models"
 import { syncNode } from "@/src/lib/api"
 import { useDebounce } from "@/src/lib/use-debounce"
 import { useProjectStore } from "@/src/stores/project-store"
@@ -12,8 +12,17 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 
 export function NodeEditor() {
-  const { currentProject, selectedNodeId, saveStatus, setSaveStatus, setProject } =
-    useProjectStore()
+  const {
+    addConflict,
+    clearConflicts,
+    conflicts,
+    currentProject,
+    selectedNodeId,
+    saveStatus,
+    setSaveStatus,
+    setProject,
+    syncStatus,
+  } = useProjectStore()
   const selectedNode = useMemo(() => {
     if (!currentProject || !selectedNodeId) {
       return null
@@ -28,6 +37,7 @@ export function NodeEditor() {
   const [locationTag, setLocationTag] = useState("")
   const [characters, setCharacters] = useState<string[]>([])
   const [newCharacterNotice, setNewCharacterNotice] = useState<string | null>(null)
+  const [expandedConflict, setExpandedConflict] = useState<number | null>(null)
 
   const lastSavedRef = useRef<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -39,10 +49,12 @@ export function NodeEditor() {
       setContent("")
       setNarrativeOrder("")
       setTimelineOrder("")
-      setLocationTag("")
-      setCharacters([])
-      setSaveStatus("idle")
-      setNewCharacterNotice(null)
+    setLocationTag("")
+    setCharacters([])
+    setSaveStatus("idle")
+    setNewCharacterNotice(null)
+      clearConflicts()
+      setExpandedConflict(null)
       lastSavedRef.current = null
       return
     }
@@ -55,6 +67,8 @@ export function NodeEditor() {
     setCharacters(selectedNode.characters ?? [])
     setSaveStatus("idle")
     setNewCharacterNotice(null)
+    clearConflicts()
+    setExpandedConflict(null)
     lastSavedRef.current = JSON.stringify({
       title: selectedNode.title ?? "",
       content: selectedNode.content ?? "",
@@ -128,13 +142,14 @@ export function NodeEditor() {
       setSaveStatus("saving")
 
       try {
-        const nextProject = await syncNode(currentProject.id, payload, {
+        const response = await syncNode(currentProject.id, payload, {
           signal: controller.signal,
         })
         if (saveCounterRef.current !== saveId) {
           return
         }
 
+        const nextProject = response.project
         const previousCharacterIds = new Set(
           currentProject.characters.map((item) => item.id)
         )
@@ -151,6 +166,11 @@ export function NodeEditor() {
         }
 
         setProject(nextProject)
+        clearConflicts()
+        ;(response.conflicts ?? []).forEach((conflict) =>
+          addConflict(conflict)
+        )
+        setExpandedConflict(null)
         lastSavedRef.current = JSON.stringify(snapshot)
         setSaveStatus("saved")
       } catch (error) {
@@ -230,7 +250,17 @@ export function NodeEditor() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle>节点编辑</CardTitle>
           <div className="text-xs text-muted-foreground">
-            {saveStatus === "saving" ? "保存中..." : saveStatus === "saved" ? "已保存" : null}
+            {saveStatus === "saving"
+              ? "保存中..."
+              : syncStatus === "syncing"
+                ? "同步中..."
+                : syncStatus === "failed"
+                  ? "同步失败"
+                  : saveStatus === "saved" && syncStatus === "completed"
+                    ? "已保存并同步"
+                    : saveStatus === "saved"
+                      ? "本地已保存"
+                      : null}
           </div>
         </div>
       </CardHeader>
@@ -238,6 +268,43 @@ export function NodeEditor() {
         {newCharacterNotice ? (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
             {newCharacterNotice}
+          </div>
+        ) : null}
+        {conflicts.length > 0 ? (
+          <div className="space-y-2">
+            {conflicts.map((conflict, index) => {
+              const isExpanded = expandedConflict === index
+              const severityClass =
+                conflict.severity === "error"
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : conflict.severity === "warning"
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : "border-blue-200 bg-blue-50 text-blue-700"
+
+              return (
+                <button
+                  type="button"
+                  key={conflict._id}
+                  className={`w-full rounded-md border px-3 py-2 text-left text-xs ${severityClass}`}
+                  onClick={() =>
+                    setExpandedConflict(isExpanded ? null : index)
+                  }
+                >
+                  <div className="font-semibold">{conflict.description}</div>
+                  {isExpanded ? (
+                    <div className="mt-2 space-y-1 text-[11px]">
+                      <div>涉及节点：{conflict.node_ids.join("、") || "无"}</div>
+                      <div>涉及实体：{conflict.entity_ids.join("、") || "无"}</div>
+                      {conflict.suggestion ? (
+                        <div>建议：{conflict.suggestion}</div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-[11px] text-slate-600">点击查看详情</div>
+                  )}
+                </button>
+              )
+            })}
           </div>
         ) : null}
         <div className="space-y-2">

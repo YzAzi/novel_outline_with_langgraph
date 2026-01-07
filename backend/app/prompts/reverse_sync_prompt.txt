@@ -3,13 +3,13 @@
 【修改后的节点】
 {modified_node}
 
-【当前完整大纲】
-{current_project}
+【相关上下文】
+{retrieved_context}
 
 请分析修改内容，检查：
 1. 是否提到了新角色？如果是，生成 CharacterProfile
 2. 时间线是否需要调整？如果是，给出新的 timeline_order 建议
-3. 是否与其他节点产生冲突？如果是，指出冲突点
+3. 是否与已有设定产生冲突？如果是，指出冲突点
 
 输出格式：
 - new_characters: list[CharacterProfile]

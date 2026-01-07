@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     model_name: str | None = None
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    chroma_persist_path: str = "backend/data/chroma_db"
 
 
 settings = Settings()

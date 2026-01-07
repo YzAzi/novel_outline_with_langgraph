@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Iterable
+from uuid import uuid4
+
+from langchain.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
+
+from .config import settings
+from .knowledge_graph import Entity, KnowledgeGraph, Relation
+from .models import StoryNode, StoryProject
+
+
+class ExtractionResult(BaseModel):
+    new_entities: list[Entity] = Field(default_factory=list)
+    new_relations: list[Relation] = Field(default_factory=list)
+    alias_mappings: list[dict] = Field(default_factory=list)
+    confidence_notes: list[str] = Field(default_factory=list)
+
+
+PROMPT_PATH = Path(__file__).parent / "prompts" / "entity_extraction_prompt.txt"
+PROMPT_TEMPLATE = PromptTemplate.from_template(PROMPT_PATH.read_text(encoding="utf-8"))
+
+
+def _serialize_entities(entities: Iterable[Entity]) -> str:
+    lines = []
+    for entity in entities:
+        alias_text = f" aliases={entity.aliases}" if entity.aliases else ""
+        lines.append(f"- {entity.id}: {entity.name} ({entity.type.value}){alias_text}")
+    return "\n".join(lines)
+
+
+def _ensure_relation_ids(relations: list[Relation]) -> list[Relation]:
+    updated: list[Relation] = []
+    for relation in relations:
+        if not relation.id:
+            relation.id = str(uuid4())
+        updated.append(relation)
+    return updated
+
+
+def _ensure_entity_ids(entities: list[Entity]) -> list[Entity]:
+    updated: list[Entity] = []
+    for entity in entities:
+        if not entity.id:
+            entity.id = str(uuid4())
+        updated.append(entity)
+    return updated
+
+
+class GraphExtractor:
+    async def extract_from_text(
+        self,
+        text: str,
+        existing_graph: KnowledgeGraph,
+    ) -> ExtractionResult:
+        if not text.strip():
+            return ExtractionResult()
+        if not settings.openai_api_key:
+            return ExtractionResult()
+
+        model_name = settings.model_name or "gpt-4o"
+        llm = ChatOpenAI(
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+            model=model_name,
+        ).with_structured_output(ExtractionResult)
+
+        prompt = PROMPT_TEMPLATE.format(
+            text=text,
+            existing_entities=_serialize_entities(existing_graph.entities),
+            output_schema=json.dumps(
+                ExtractionResult.model_json_schema(), ensure_ascii=False, indent=2
+            ),
+        )
+
+        result: ExtractionResult = await asyncio.to_thread(llm.invoke, prompt)
+        result.new_entities = _ensure_entity_ids(result.new_entities)
+        result.new_relations = _ensure_relation_ids(result.new_relations)
+        return result
+
+    async def extract_from_node(
+        self,
+        node: StoryNode,
+        existing_graph: KnowledgeGraph,
+    ) -> ExtractionResult:
+        text = "\n".join([node.title, node.content]).strip()
+        result = await self.extract_from_text(text, existing_graph)
+        if result.new_entities:
+            for entity in result.new_entities:
+                if node.id not in entity.source_refs:
+                    entity.source_refs.append(node.id)
+        if result.new_relations:
+            for relation in result.new_relations:
+                if node.id not in relation.source_refs:
+                    relation.source_refs.append(node.id)
+        return result
+
+    async def build_full_graph(
+        self,
+        project: StoryProject,
+    ) -> KnowledgeGraph:
+        graph = KnowledgeGraph(
+            project_id=project.id,
+            entities=[],
+            relations=[],
+            last_updated=project.updated_at,
+        )
+
+        for node in project.nodes:
+            result = await self.extract_from_node(node, graph)
+            graph.entities.extend(result.new_entities)
+            graph.relations.extend(result.new_relations)
+        graph.last_updated = project.updated_at
+        return graph
+
+    async def incremental_update(
+        self,
+        project_id: str,
+        modified_node: StoryNode,
+        current_graph: KnowledgeGraph,
+    ) -> KnowledgeGraph:
+        updated_graph = KnowledgeGraph(
+            project_id=project_id,
+            entities=list(current_graph.entities),
+            relations=list(current_graph.relations),
+            last_updated=current_graph.last_updated,
+        )
+        result = await self.extract_from_node(modified_node, updated_graph)
+        updated_graph.entities.extend(result.new_entities)
+        updated_graph.relations.extend(result.new_relations)
+        updated_graph.last_updated = datetime.utcnow()
+        return updated_graph

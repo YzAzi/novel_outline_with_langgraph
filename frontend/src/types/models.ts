@@ -32,8 +32,106 @@ export interface ProjectSummary {
   updated_at: string
 }
 
+export type ConflictType =
+  | "timeline"
+  | "character"
+  | "relation"
+  | "world_rule"
+
+export interface Conflict {
+  type: ConflictType
+  severity: "error" | "warning" | "info"
+  description: string
+  node_ids: string[]
+  entity_ids: string[]
+  suggestion: string | null
+}
+
+export interface SyncResult {
+  success: boolean
+  vector_updated: boolean
+  graph_updated: boolean
+  new_entities: unknown[]
+  new_relations: unknown[]
+  removed_entities: string[]
+  removed_relations: string[]
+  warnings: string[]
+}
+
+export interface SyncNodeResponse {
+  project: StoryProject
+  sync_result: SyncResult
+  conflicts: Conflict[]
+}
+
+export interface WorldDocument {
+  id: string
+  project_id: string
+  title: string
+  category: string
+  content: string
+  chunks: string[]
+  created_at: string
+  updated_at: string
+}
+
+export interface WorldKnowledgeBase {
+  project_id: string
+  documents: WorldDocument[]
+  total_chunks: number
+  total_characters: number
+}
+
+export interface SearchResult {
+  id: string
+  content: string
+  metadata: Record<string, unknown>
+  score: number
+}
+
+export interface ProjectStatsResponse {
+  total_nodes: number
+  total_characters: number
+  total_knowledge_docs: number
+  total_words: number
+  graph_entities: number
+  graph_relations: number
+}
+
+export type SnapshotType = "auto" | "manual" | "milestone" | "pre_sync"
+
+export interface IndexSnapshot {
+  version: number
+  snapshot_type: SnapshotType
+  name: string | null
+  description: string | null
+  story_project: StoryProject
+  knowledge_graph: {
+    project_id: string
+    entities: unknown[]
+    relations: unknown[]
+    last_updated: string
+  }
+  node_count: number
+  entity_count: number
+  created_at: string
+}
+
+export interface VersionDiff {
+  nodes_added: string[]
+  nodes_modified: string[]
+  nodes_deleted: string[]
+  entities_added: string[]
+  entities_deleted: string[]
+  relations_added: string[]
+  relations_deleted: string[]
+  words_added: number
+  words_removed: number
+}
+
 export interface CreateOutlineRequest {
   world_view: string
   style_tags: string[]
   initial_prompt: string
+  base_project_id?: string | null
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -25,13 +25,14 @@ const formSchema = z.object({
   worldView: z.string().trim().min(1, "请填写世界观设定"),
   styleTags: z.string().trim().optional(),
   initialPrompt: z.string().trim().optional(),
+  baseProjectId: z.string().optional(),
 })
 
 type FormValues = z.infer<typeof formSchema>
 
 export function CreateDialog() {
   const [open, setOpen] = useState(false)
-  const { isLoading, loadProjects, setProject } = useProjectStore()
+  const { isLoading, loadProjects, projects, setProject } = useProjectStore()
   const {
     register,
     handleSubmit,
@@ -43,8 +44,15 @@ export function CreateDialog() {
       worldView: "",
       styleTags: "",
       initialPrompt: "",
+      baseProjectId: "",
     },
   })
+
+  useEffect(() => {
+    if (open) {
+      loadProjects()
+    }
+  }, [loadProjects, open])
 
   const onSubmit = async (values: FormValues) => {
     const tags = values.styleTags
@@ -58,6 +66,7 @@ export function CreateDialog() {
       world_view: values.worldView.trim(),
       style_tags: tags,
       initial_prompt: values.initialPrompt?.trim() ?? "",
+      base_project_id: values.baseProjectId?.trim() || undefined,
     }
 
     try {
@@ -114,6 +123,26 @@ export function CreateDialog() {
               placeholder="悬疑, 非线性叙事"
               {...register("styleTags")}
             />
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium" htmlFor="baseProjectId">
+              继承项目（续作/前作）
+            </label>
+            <select
+              id="baseProjectId"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              {...register("baseProjectId")}
+            >
+              <option value="">不继承</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.title}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              仅在续作/前作时选择，用于继承世界观与关系线索。
+            </p>
           </div>
           <div className="space-y-1">
             <label className="text-sm font-medium" htmlFor="initialPrompt">

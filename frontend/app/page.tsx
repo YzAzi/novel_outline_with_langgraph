@@ -4,9 +4,15 @@ import { useEffect, useState } from "react"
 
 import { CreateDialog } from "@/components/create-dialog"
 import { CharacterGraph } from "@/components/character-graph"
+import { ConflictAlert } from "@/components/conflict-alert"
+import { KnowledgeWorkspace } from "@/components/knowledge-workspace"
 import { ProjectList } from "@/components/project-list"
 import { NodeEditor } from "@/components/node-editor"
 import { StoryVisualizer } from "@/components/story-visualizer"
+import { SyncIndicator } from "@/components/sync-indicator"
+import { VersionHistory } from "@/components/version-history"
+import { createVersion } from "@/src/lib/api"
+import { useWebsocket } from "@/src/hooks/use-websocket"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
@@ -29,10 +35,40 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState("outline")
   const [title, setTitle] = useState(DEFAULT_TITLE)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [versionOpen, setVersionOpen] = useState(false)
+
+  useWebsocket(currentProject?.id ?? null)
 
   useEffect(() => {
     setTitle(currentProject?.title ?? DEFAULT_TITLE)
   }, [currentProject])
+
+  useEffect(() => {
+    const handleKeyDown = async (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault()
+        setVersionOpen(true)
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault()
+        if (!currentProject) {
+          return
+        }
+        const name = `手动快照 ${new Date().toLocaleString()}`
+        try {
+          await createVersion(currentProject.id, { name, type: "manual" })
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "创建快照失败"
+          setError(message)
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [currentProject, setError])
 
   useEffect(() => {
     loadProjects()
@@ -82,14 +118,23 @@ export default function Home() {
                   ? "已保存"
                   : null}
             </div>
+            <SyncIndicator />
           </div>
           <div className="flex flex-1 items-center justify-between gap-3 lg:justify-end">
             <Tabs value={activeTab} onValueChange={setActiveTab}>
               <TabsList>
                 <TabsTrigger value="outline">大纲视图</TabsTrigger>
                 <TabsTrigger value="relations">角色关系</TabsTrigger>
+                <TabsTrigger value="knowledge">世界观设定</TabsTrigger>
               </TabsList>
             </Tabs>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setVersionOpen(true)}
+            >
+              版本历史
+            </Button>
             <CreateDialog />
           </div>
         </div>
@@ -101,17 +146,23 @@ export default function Home() {
             <div className="h-full pr-2">
               {activeTab === "outline" ? (
                 <StoryVisualizer />
-              ) : (
+              ) : activeTab === "relations" ? (
                 <CharacterGraph />
+              ) : (
+                <KnowledgeWorkspace />
               )}
             </div>
           </ResizablePanel>
-          <ResizableHandle withHandle />
-          <ResizablePanel defaultSize={40} minSize={25}>
-            <div className="h-full pl-2">
-              <NodeEditor />
-            </div>
-          </ResizablePanel>
+          {activeTab === "knowledge" ? null : (
+            <>
+              <ResizableHandle withHandle />
+              <ResizablePanel defaultSize={40} minSize={25}>
+                <div className="h-full pl-2">
+                  <NodeEditor />
+                </div>
+              </ResizablePanel>
+            </>
+          )}
         </ResizablePanelGroup>
       </main>
 
@@ -131,6 +182,9 @@ export default function Home() {
           </Button>
         </div>
       ) : null}
+
+      <ConflictAlert />
+      <VersionHistory open={versionOpen} onClose={() => setVersionOpen(false)} />
 
       {drawerOpen ? (
         <div className="fixed inset-0 z-40">

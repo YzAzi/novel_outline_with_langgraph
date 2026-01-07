@@ -9,6 +9,9 @@
 【用户需求】
 {user_input}
 
+【检索到的上下文】
+{retrieved_context}
+
 请生成：
 - 5 个故事节点 (StoryNode)，包含不同的 location_tag 来体现多线叙事
 - 3 个主要角色 (CharacterProfile)

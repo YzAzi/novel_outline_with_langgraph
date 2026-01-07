@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 import logging
 from pathlib import Path
-from typing import Callable, TypedDict
+from typing import TypedDict
 
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
@@ -11,7 +11,13 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 
 from .config import settings
+from .graph_extractor import GraphExtractor
+from .graph_retriever import RetrievalContext, GraphRetriever
+from .knowledge_graph import KnowledgeGraph, load_graph, save_graph
 from .models import CreateOutlineRequest, StoryNode, StoryProject, SyncAnalysisResult
+from .node_indexer import NodeIndexer
+from .world_knowledge import WorldKnowledgeManager
+from .sync_strategy import DEFAULT_SYNC_CONFIG, SyncMode
 
 LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -36,9 +42,12 @@ class AgentState(TypedDict):
     user_input: str
     world_view: str
     style_tags: list[str]
+    base_project_id: str | None
     current_project: StoryProject | None
     modified_node: StoryNode | None
     sync_result: dict | None
+    retrieved_context: RetrievalContext | None
+    knowledge_graph: KnowledgeGraph | None
     error: str | None
 
 
@@ -54,11 +63,84 @@ class WorkflowError(Exception):
     pass
 
 
+async def retrieval_node(state: AgentState) -> AgentState:
+    print("[retrieval_node] start")
+    try:
+        project = state.get("current_project")
+        base_project_id = state.get("base_project_id")
+        if project is None and not base_project_id:
+            return {**state, "retrieved_context": None, "knowledge_graph": None}
+
+        retrieval_project_id = project.id if project else base_project_id
+        if not retrieval_project_id:
+            return {**state, "retrieved_context": None, "knowledge_graph": None}
+
+        knowledge_graph = load_graph(retrieval_project_id)
+        retriever = GraphRetriever(
+            knowledge_graph=knowledge_graph,
+            node_indexer=NodeIndexer(),
+            world_knowledge=WorldKnowledgeManager(),
+        )
+
+        if state.get("modified_node"):
+            query = state["modified_node"].content
+        else:
+            query = state["user_input"]
+
+        context = await retriever.retrieve_context(
+            query=query,
+            project_id=retrieval_project_id,
+            max_tokens=4000,
+        )
+        print("[retrieval_node] complete")
+        return {**state, "retrieved_context": context, "knowledge_graph": knowledge_graph}
+    except Exception as exc:
+        state["error"] = str(exc)
+        return state
+
+
+async def graph_update_node(state: AgentState) -> AgentState:
+    print("[graph_update_node] start")
+    try:
+        project = state.get("current_project")
+        if project is None:
+            return state
+
+        if state.get("modified_node") and DEFAULT_SYNC_CONFIG.graph_sync_mode != SyncMode.IMMEDIATE:
+            return state
+
+        extractor = GraphExtractor()
+        node_indexer = NodeIndexer()
+        knowledge_graph = state.get("knowledge_graph") or load_graph(project.id)
+
+        if state.get("modified_node"):
+            updated_node = next(
+                (node for node in project.nodes if node.id == state["modified_node"].id),
+                state["modified_node"],
+            )
+            updated_graph = await extractor.incremental_update(
+                project_id=project.id,
+                modified_node=updated_node,
+                current_graph=knowledge_graph,
+            )
+            await node_indexer.index_node(project.id, updated_node)
+        else:
+            updated_graph = await extractor.build_full_graph(project)
+            await node_indexer.index_project(project)
+
+        save_graph(updated_graph)
+        print("[graph_update_node] complete")
+        return {**state, "knowledge_graph": updated_graph}
+    except Exception as exc:
+        state["error"] = str(exc)
+        return state
+
+
 def _route_on_error(state: AgentState) -> str:
     return "error_handler_node" if state.get("error") else "next"
 
 
-def drafting_node(state: AgentState) -> AgentState:
+async def drafting_node(state: AgentState) -> AgentState:
     print("[drafting_node] start")
     try:
         if not settings.openai_api_key:
@@ -71,10 +153,17 @@ def drafting_node(state: AgentState) -> AgentState:
             model=model_name,
         ).with_structured_output(StoryProject)
 
+        retrieved_context = state.get("retrieved_context")
+        retrieved_text = (
+            retrieved_context.to_prompt_text()
+            if retrieved_context
+            else "无"
+        )
         base_inputs = {
             "world_view": state["world_view"],
             "style_tags": ", ".join(state["style_tags"]),
             "user_input": state["user_input"],
+            "retrieved_context": retrieved_text,
         }
 
         last_error: Exception | None = None
@@ -84,7 +173,7 @@ def drafting_node(state: AgentState) -> AgentState:
                 prompt_text = DRAFT_PROMPT_TEMPLATE.format(**base_inputs)
                 if attempt > 1:
                     prompt_text = f"{prompt_text}\n\n请严格按照要求的格式输出"
-                result = llm.invoke(prompt_text)
+                result = await llm.ainvoke(prompt_text)
                 state["current_project"] = result
                 state["error"] = None
                 print("[drafting_node] complete")
@@ -114,7 +203,7 @@ def validation_node(state: AgentState) -> AgentState:
         return state
 
 
-def reverse_sync_node(state: AgentState) -> AgentState:
+async def reverse_sync_node(state: AgentState) -> AgentState:
     print("[reverse_sync_node] start")
     try:
         if not settings.openai_api_key:
@@ -132,9 +221,15 @@ def reverse_sync_node(state: AgentState) -> AgentState:
             model=model_name,
         ).with_structured_output(SyncAnalysisResult)
 
+        retrieved_context = state.get("retrieved_context")
+        retrieved_text = (
+            retrieved_context.to_prompt_text()
+            if retrieved_context
+            else "无"
+        )
         base_inputs = {
             "modified_node": modified_node.model_dump_json(indent=2),
-            "current_project": project.model_dump_json(indent=2),
+            "retrieved_context": retrieved_text,
         }
 
         last_error: Exception | None = None
@@ -144,11 +239,11 @@ def reverse_sync_node(state: AgentState) -> AgentState:
                 prompt_text = REVERSE_SYNC_PROMPT_TEMPLATE.format(**base_inputs)
                 if attempt > 1:
                     prompt_text = f"{prompt_text}\n\n请严格按照要求的格式输出"
-                result = llm.invoke(prompt_text)
+                result = await llm.ainvoke(prompt_text)
                 state["sync_result"] = result.model_dump()
                 state["error"] = None
                 print("[reverse_sync_node] complete")
-                return state
+                return apply_sync_node(state)
             except Exception as exc:  # pragma: no cover - network or provider errors
                 last_error = exc
                 print(f"[reverse_sync_node] attempt {attempt} failed: {exc}")
@@ -214,49 +309,64 @@ def error_handler_node(state: AgentState) -> AgentState:
 
 
 graph = StateGraph(AgentState)
+graph.add_node("retrieval_node", retrieval_node)
 graph.add_node("drafting_node", drafting_node)
+graph.add_node("graph_update_node", graph_update_node)
 graph.add_node("validation_node", validation_node)
 graph.add_node("error_handler_node", error_handler_node)
-graph.add_edge(START, "drafting_node")
+graph.add_edge(START, "retrieval_node")
+graph.add_edge("retrieval_node", "drafting_node")
 graph.add_conditional_edges(
     "drafting_node", _route_on_error, {"error_handler_node": "error_handler_node", "next": "validation_node"}
 )
 graph.add_conditional_edges(
-    "validation_node", _route_on_error, {"error_handler_node": "error_handler_node", "next": END}
+    "validation_node", _route_on_error, {"error_handler_node": "error_handler_node", "next": "graph_update_node"}
+)
+graph.add_conditional_edges(
+    "graph_update_node",
+    _route_on_error,
+    {"error_handler_node": "error_handler_node", "next": END},
 )
 graph.add_edge("error_handler_node", END)
 
 compiled_graph = graph.compile()
 
 sync_graph = StateGraph(AgentState)
+sync_graph.add_node("retrieval_node", retrieval_node)
 sync_graph.add_node("reverse_sync_node", reverse_sync_node)
-sync_graph.add_node("apply_sync_node", apply_sync_node)
+sync_graph.add_node("graph_update_node", graph_update_node)
 sync_graph.add_node("error_handler_node", error_handler_node)
-sync_graph.add_edge(START, "reverse_sync_node")
+sync_graph.add_edge(START, "retrieval_node")
+sync_graph.add_edge("retrieval_node", "reverse_sync_node")
 sync_graph.add_conditional_edges(
     "reverse_sync_node",
     _route_on_error,
-    {"error_handler_node": "error_handler_node", "next": "apply_sync_node"},
+    {"error_handler_node": "error_handler_node", "next": "graph_update_node"},
 )
 sync_graph.add_conditional_edges(
-    "apply_sync_node", _route_on_error, {"error_handler_node": "error_handler_node", "next": END}
+    "graph_update_node",
+    _route_on_error,
+    {"error_handler_node": "error_handler_node", "next": END},
 )
 sync_graph.add_edge("error_handler_node", END)
 
 compiled_sync_graph = sync_graph.compile()
 
 
-def run_drafting_workflow(input: CreateOutlineRequest) -> StoryProject:
+async def run_drafting_workflow(input: CreateOutlineRequest) -> StoryProject:
     initial_state: AgentState = {
         "user_input": input.initial_prompt,
         "world_view": input.world_view,
         "style_tags": input.style_tags,
+        "base_project_id": input.base_project_id,
         "current_project": None,
         "modified_node": None,
         "sync_result": None,
+        "retrieved_context": None,
+        "knowledge_graph": None,
         "error": None,
     }
-    result = compiled_graph.invoke(initial_state)
+    result = await compiled_graph.ainvoke(initial_state)
     if result.get("error"):
         raise WorkflowError(result["error"])
     if result.get("current_project") is None:
@@ -264,17 +374,20 @@ def run_drafting_workflow(input: CreateOutlineRequest) -> StoryProject:
     return result["current_project"]
 
 
-def run_sync_workflow(project: StoryProject, modified_node: StoryNode) -> StoryProject:
+async def run_sync_workflow(project: StoryProject, modified_node: StoryNode) -> StoryProject:
     initial_state: AgentState = {
         "user_input": "",
         "world_view": project.world_view,
         "style_tags": project.style_tags,
+        "base_project_id": None,
         "current_project": project,
         "modified_node": modified_node,
         "sync_result": None,
+        "retrieved_context": None,
+        "knowledge_graph": None,
         "error": None,
     }
-    result = compiled_sync_graph.invoke(initial_state)
+    result = await compiled_sync_graph.ainvoke(initial_state)
     if result.get("error"):
         raise WorkflowError(result["error"])
     if result.get("current_project") is None:

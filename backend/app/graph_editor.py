@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+from copy import deepcopy
+
+from .knowledge_graph import Entity, KnowledgeGraph, Relation
+
+
+class GraphEditor:
+    def __init__(self, knowledge_graph: KnowledgeGraph):
+        self.graph = knowledge_graph
+
+    async def update_entity(self, entity_id: str, updates: dict) -> Entity:
+        snapshot = deepcopy(self.graph)
+        try:
+            entity = self._find_entity(entity_id)
+            if entity is None:
+                raise ValueError("Entity not found")
+            for key, value in updates.items():
+                if hasattr(entity, key):
+                    setattr(entity, key, value)
+            self._touch_graph()
+            return entity
+        except Exception:
+            self.graph.entities = snapshot.entities
+            self.graph.relations = snapshot.relations
+            self.graph.last_updated = snapshot.last_updated
+            raise
+
+    async def delete_entity(self, entity_id: str) -> dict:
+        snapshot = deepcopy(self.graph)
+        try:
+            entity = self._find_entity(entity_id)
+            if entity is None:
+                raise ValueError("Entity not found")
+            before_count = len(self.graph.relations)
+            self.graph.relations = [
+                relation
+                for relation in self.graph.relations
+                if relation.source_id != entity_id and relation.target_id != entity_id
+            ]
+            deleted_relations = before_count - len(self.graph.relations)
+            self.graph.entities = [
+                item for item in self.graph.entities if item.id != entity_id
+            ]
+            self._touch_graph()
+            return {"deleted_relations": deleted_relations}
+        except Exception:
+            self.graph.entities = snapshot.entities
+            self.graph.relations = snapshot.relations
+            self.graph.last_updated = snapshot.last_updated
+            raise
+
+    async def merge_entities(self, from_id: str, into_id: str) -> Entity:
+        snapshot = deepcopy(self.graph)
+        try:
+            if from_id == into_id:
+                raise ValueError("Cannot merge entity into itself")
+
+            source = self._find_entity(from_id)
+            target = self._find_entity(into_id)
+            if source is None or target is None:
+                raise ValueError("Entity not found")
+
+            merged_aliases = set(target.aliases)
+            merged_aliases.add(source.name)
+            merged_aliases.update(source.aliases)
+            merged_aliases.discard(target.name)
+            target.aliases = list(merged_aliases)
+
+            for relation in self.graph.relations:
+                if relation.source_id == source.id:
+                    relation.source_id = target.id
+                if relation.target_id == source.id:
+                    relation.target_id = target.id
+
+            target.source_refs = list(set(target.source_refs + source.source_refs))
+            self.graph.entities = [
+                entity for entity in self.graph.entities if entity.id != source.id
+            ]
+
+            self._dedupe_relations()
+            self._touch_graph()
+            return target
+        except Exception:
+            self.graph.entities = snapshot.entities
+            self.graph.relations = snapshot.relations
+            self.graph.last_updated = snapshot.last_updated
+            raise
+
+    def _find_entity(self, entity_id: str) -> Entity | None:
+        for entity in self.graph.entities:
+            if entity.id == entity_id:
+                return entity
+        return None
+
+    def _dedupe_relations(self) -> None:
+        unique: dict[tuple[str, str, str, str], Relation] = {}
+        for relation in self.graph.relations:
+            relation_type = (
+                relation.relation_type.value
+                if hasattr(relation.relation_type, "value")
+                else str(relation.relation_type)
+            )
+            key = tuple(
+                sorted([relation.source_id, relation.target_id])
+                + [relation_type, relation.relation_name]
+            )
+            existing = unique.get(key)
+            if not existing:
+                unique[key] = relation
+                continue
+            keep = self._pick_relation(existing, relation)
+            unique[key] = keep
+        self.graph.relations = list(unique.values())
+
+    def _pick_relation(self, first: Relation, second: Relation) -> Relation:
+        first_score = self._relation_score(first)
+        second_score = self._relation_score(second)
+        if second_score > first_score:
+            return second
+        return first
+
+    def _relation_score(self, relation: Relation) -> float:
+        weight = 0.0
+        if isinstance(relation.properties, dict):
+            weight = float(relation.properties.get("strength", 0.0) or 0.0)
+        description_score = len(relation.description or "")
+        return weight * 1000 + description_score
+
+    def _touch_graph(self) -> None:
+        from datetime import datetime
+
+        self.graph.last_updated = datetime.utcnow()

@@ -123,6 +123,7 @@ class CreateOutlineRequest(BaseModel):
     world_view: str
     style_tags: list[str] = Field(default_factory=list)
     initial_prompt: str
+    base_project_id: str | None = None
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -166,6 +167,26 @@ class SyncNodeRequest(BaseModel):
     )
 
 
+class KnowledgeDocumentRequest(BaseModel):
+    title: str
+    category: str
+    content: str
+
+
+class KnowledgeUpdateRequest(BaseModel):
+    content: str
+
+
+class KnowledgeImportRequest(BaseModel):
+    markdown_content: str
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str
+    categories: list[str] | None = None
+    top_k: int | None = None
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str
@@ -189,6 +210,27 @@ class ProjectSummary(BaseModel):
             }
         }
     )
+
+
+class ProjectStatsResponse(BaseModel):
+    total_nodes: int
+    total_characters: int
+    total_knowledge_docs: int
+    total_words: int
+    graph_entities: int
+    graph_relations: int
+
+
+class VersionCreateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    type: str | None = None
+
+
+class VersionUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    promote_to_milestone: bool | None = None
 
 
 class TimelineUpdate(BaseModel):
