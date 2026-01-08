@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -181,3 +182,23 @@ class VersionStorage:
             )
             await session.commit()
         return snapshot
+
+    async def delete_project_data(self, project_id: str) -> None:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(VersionIndex).where(VersionIndex.project_id == project_id)
+            )
+            records = result.scalars().all()
+            await session.execute(
+                delete(VersionIndex).where(VersionIndex.project_id == project_id)
+            )
+            await session.commit()
+
+        for record in records:
+            path = Path(record.file_path)
+            if path.exists():
+                path.unlink()
+
+        project_dir = self._base_dir / project_id
+        if project_dir.exists():
+            shutil.rmtree(project_dir, ignore_errors=True)

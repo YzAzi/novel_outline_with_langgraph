@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 
 import type { WorldDocument } from "@/src/types/models"
 import { updateWorldDocument } from "@/src/lib/api"
@@ -13,6 +13,11 @@ export function KnowledgeWorkspace() {
   const { currentProject } = useProjectStore()
   const [selectedDocument, setSelectedDocument] = useState<WorldDocument | null>(null)
   const [refreshSignal, setRefreshSignal] = useState(0)
+
+  useEffect(() => {
+    setSelectedDocument(null)
+    setRefreshSignal((prev) => prev + 1)
+  }, [currentProject?.id])
 
   const handleSave = useCallback(
     async (content: string) => {

@@ -9,6 +9,7 @@ from .knowledge_graph import Entity, EntityType, KnowledgeGraph, Relation
 from .models import StoryNode
 from .node_indexer import NodeIndexer
 from .world_knowledge import WorldKnowledgeManager
+from .text_utils import tokenize
 
 
 def _estimate_tokens(text: str) -> int:
@@ -21,12 +22,54 @@ def _node_summary(node: StoryNode) -> str:
     content = node.content.strip().replace("\n", " ")
     if len(content) > 120:
         content = f"{content[:117]}..."
-    return f"{node.title}：{content}"
+    meta_parts = []
+    if node.location_tag:
+        meta_parts.append(f"地点={node.location_tag}")
+    if node.characters:
+        meta_parts.append(f"角色={','.join(node.characters[:5])}")
+    meta = f"（{'; '.join(meta_parts)}）" if meta_parts else ""
+    return f"{node.title}{meta}：{content}"
+
+
+def _extract_tokens(text: str) -> set[str]:
+    lowered = text.lower()
+    words = re.findall(r"[a-z0-9]+", lowered)
+    cjk = re.findall(r"[\u4e00-\u9fff]", text)
+    return set(words + cjk)
+
+
+def _keyword_score(tokens: set[str], text: str) -> int:
+    if not tokens or not text:
+        return 0
+    text_tokens = _extract_tokens(text)
+    return len(tokens.intersection(text_tokens))
+
+
+def _format_knowledge_snippet(content: str, title: str | None, category: str | None) -> str:
+    snippet = content.strip().replace("\n", " ")
+    if len(snippet) > 180:
+        snippet = f"{snippet[:177]}..."
+    title_part = title or "知识片段"
+    category_part = category or "general"
+    return f"{title_part}（{category_part}）：{snippet}"
+
+
+class KnowledgeEvidence(BaseModel):
+    source_id: str
+    title: str | None = None
+    category: str | None = None
+    snippet: str
+    score: float | None = None
+
+    def to_text(self) -> str:
+        title_part = self.title or "知识片段"
+        category_part = self.category or "general"
+        return f"{title_part}（{category_part}）：{self.snippet}"
 
 
 class RetrievalContext(BaseModel):
     relevant_nodes: list[StoryNode] = Field(default_factory=list)
-    relevant_knowledge: list[str] = Field(default_factory=list)
+    relevant_knowledge: list["KnowledgeEvidence"] = Field(default_factory=list)
     relevant_entities: list[Entity] = Field(default_factory=list)
     relevant_relations: list[Relation] = Field(default_factory=list)
     token_count: int = 0
@@ -36,7 +79,7 @@ class RetrievalContext(BaseModel):
             f"- {node.id}: {_node_summary(node)}" for node in self.relevant_nodes
         )
         knowledge_text = "\n".join(
-            f"- {snippet}" for snippet in self.relevant_knowledge
+            f"- {item.to_text()}" for item in self.relevant_knowledge
         )
         entities_text = "\n".join(
             f"- {entity.name} ({entity.type.value}): {entity.description}"
@@ -97,17 +140,155 @@ class GraphRetriever:
         project_id: str,
         max_tokens: int = 4000,
     ) -> RetrievalContext:
-        nodes = await self._node_indexer.search_related_nodes(
-            project_id=project_id,
-            query=query,
-            top_k=10,
+        queries = self._build_queries(query)
+        base_tokens = tokenize(query)
+
+        node_scores: dict[str, dict] = {}
+        for q in queries:
+            vector_nodes = await self._node_indexer.search_related_nodes_with_scores(
+                project_id=project_id,
+                query=q,
+                top_k=8,
+            )
+            for node, score in vector_nodes:
+                entry = node_scores.setdefault(
+                    node.id, {"node": node, "vector": 0.0, "keyword": 0.0}
+                )
+                entry["vector"] = max(entry["vector"], float(score))
+
+            keyword_nodes = await self._node_indexer.search_keyword_nodes(
+                project_id=project_id,
+                query=q,
+                top_k=6,
+            )
+            for node, score in keyword_nodes:
+                entry = node_scores.setdefault(
+                    node.id, {"node": node, "vector": 0.0, "keyword": 0.0}
+                )
+                entry["keyword"] = max(entry["keyword"], float(score))
+
+            bm25_nodes = await self._node_indexer.search_bm25_nodes(
+                project_id=project_id,
+                query=q,
+                top_k=6,
+            )
+            for node, score in bm25_nodes:
+                entry = node_scores.setdefault(
+                    node.id, {"node": node, "vector": 0.0, "keyword": 0.0, "bm25": 0.0}
+                )
+                entry["bm25"] = max(entry.get("bm25", 0.0), float(score))
+
+        max_keyword = max(
+            (entry.get("keyword", 0.0) for entry in node_scores.values()),
+            default=0.0,
         )
-        knowledge_hits = await self._world_knowledge.search_knowledge(
-            project_id=project_id,
-            query=query,
-            top_k=10,
+        max_bm25 = max(
+            (entry.get("bm25", 0.0) for entry in node_scores.values()),
+            default=0.0,
         )
-        knowledge_texts = [result.content for result in knowledge_hits]
+
+        ranked_nodes = []
+        for entry in node_scores.values():
+            keyword_norm = (
+                entry.get("keyword", 0.0) / max(1.0, max_keyword)
+                if max_keyword
+                else 0.0
+            )
+            bm25_norm = (
+                entry.get("bm25", 0.0) / max(1.0, max_bm25)
+                if max_bm25
+                else 0.0
+            )
+            combined = entry.get("vector", 0.0) * 0.6 + keyword_norm * 0.2 + bm25_norm * 0.2
+            ranked_nodes.append((combined, entry["node"]))
+        ranked_nodes.sort(key=lambda item: item[0], reverse=True)
+        nodes = [node for _score, node in ranked_nodes[:10]]
+
+        knowledge_map: dict[str, dict] = {}
+        knowledge_evidence: dict[str, KnowledgeEvidence] = {}
+        for q in queries:
+            knowledge_hits = await self._world_knowledge.search_knowledge(
+                project_id=project_id,
+                query=q,
+                top_k=8,
+            )
+            for result in knowledge_hits:
+                entry = knowledge_map.setdefault(
+                    str(result.id), {"vector": 0.0, "keyword": 0.0, "bm25": 0.0}
+                )
+                entry["vector"] = max(entry["vector"], float(result.score))
+                evidence_key = str(result.id)
+                knowledge_evidence[evidence_key] = KnowledgeEvidence(
+                    source_id=evidence_key,
+                    title=result.metadata.get("title"),
+                    category=result.metadata.get("category"),
+                    snippet=_format_knowledge_snippet(
+                        result.content,
+                        result.metadata.get("title"),
+                        result.metadata.get("category"),
+                    ),
+                    score=float(result.score),
+                )
+
+            keyword_hits = await self._world_knowledge.search_knowledge_keyword(
+                project_id=project_id,
+                query=q,
+                top_k=6,
+            )
+            for snippet in keyword_hits:
+                key = f"kw:{snippet[:32]}"
+                entry = knowledge_map.setdefault(
+                    key, {"vector": 0.0, "keyword": 0.0, "bm25": 0.0}
+                )
+                entry["keyword"] = max(entry["keyword"], 0.2)
+                knowledge_evidence[key] = KnowledgeEvidence(
+                    source_id=key,
+                    title=None,
+                    category=None,
+                    snippet=snippet,
+                    score=0.2,
+                )
+
+            bm25_hits = await self._world_knowledge.search_bm25_snippets(
+                project_id=project_id,
+                query=q,
+                top_k=6,
+            )
+            for snippet, score, doc in bm25_hits:
+                key = f"bm25:{doc.id}"
+                entry = knowledge_map.setdefault(
+                    key, {"vector": 0.0, "keyword": 0.0, "bm25": 0.0}
+                )
+                entry["bm25"] = max(entry["bm25"], float(score))
+                knowledge_evidence[key] = KnowledgeEvidence(
+                    source_id=str(doc.id),
+                    title=doc.title,
+                    category=doc.category,
+                    snippet=snippet,
+                    score=float(score),
+                )
+
+        max_vector = max(
+            (entry["vector"] for entry in knowledge_map.values()), default=0.0
+        )
+        max_keyword = max(
+            (entry["keyword"] for entry in knowledge_map.values()), default=0.0
+        )
+        max_bm25 = max(
+            (entry["bm25"] for entry in knowledge_map.values()), default=0.0
+        )
+        combined_knowledge = []
+        for key, entry in knowledge_map.items():
+            vector_norm = entry["vector"] / max(1.0, max_vector) if max_vector else 0.0
+            keyword_norm = entry["keyword"] / max(1.0, max_keyword) if max_keyword else 0.0
+            bm25_norm = entry["bm25"] / max(1.0, max_bm25) if max_bm25 else 0.0
+            score = vector_norm * 0.6 + keyword_norm * 0.2 + bm25_norm * 0.2
+            combined_knowledge.append((key, score))
+
+        combined_knowledge.sort(key=lambda item: item[1], reverse=True)
+        knowledge_texts = [
+            knowledge_evidence[item_id] for item_id, _score in combined_knowledge[:10]
+        ]
 
         entity_hits = self._match_entities(query)
         relation_hits = self._match_relations(entity_hits)
@@ -227,6 +408,29 @@ class GraphRetriever:
                 results.append(entity)
         return results
 
+    def _build_queries(self, query: str) -> list[str]:
+        queries = [query]
+        entities = self._match_entities(query)
+        for entity in entities:
+            if entity.name:
+                queries.append(entity.name)
+            for alias in entity.aliases:
+                queries.append(alias)
+
+        tokens = [token for token in tokenize(query) if len(token) > 1]
+        if tokens:
+            queries.append(" ".join(tokens[:6]))
+
+        seen = set()
+        deduped = []
+        for item in queries:
+            text = item.strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            deduped.append(text)
+        return deduped[:6]
+
     def _match_relations(self, entities: list[Entity]) -> list[Relation]:
         entity_ids = {entity.id for entity in entities}
         return [
@@ -345,7 +549,7 @@ class GraphRetriever:
                     nodes.append(item.value)
                     tokens += cost
             elif item.kind == "knowledge":
-                cost = _estimate_tokens(item.value)
+                cost = _estimate_tokens(item.value.snippet)
                 if tokens + cost <= max_tokens:
                     knowledge.append(item.value)
                     tokens += cost
@@ -374,3 +578,6 @@ class GraphRetriever:
             relevant_relations=relations,
             token_count=tokens,
         )
+
+
+RetrievalContext.model_rebuild()

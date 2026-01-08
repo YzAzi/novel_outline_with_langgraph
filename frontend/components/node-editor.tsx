@@ -20,6 +20,8 @@ export function NodeEditor() {
     selectedNodeId,
     saveStatus,
     setSaveStatus,
+    setSyncRequestId,
+    setSyncStatus,
     setProject,
     syncStatus,
   } = useProjectStore()
@@ -38,6 +40,7 @@ export function NodeEditor() {
   const [characters, setCharacters] = useState<string[]>([])
   const [newCharacterNotice, setNewCharacterNotice] = useState<string | null>(null)
   const [expandedConflict, setExpandedConflict] = useState<number | null>(null)
+  const [validationError, setValidationError] = useState<string | null>(null)
 
   const lastSavedRef = useRef<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -53,9 +56,10 @@ export function NodeEditor() {
     setCharacters([])
     setSaveStatus("idle")
     setNewCharacterNotice(null)
-      clearConflicts()
-      setExpandedConflict(null)
-      lastSavedRef.current = null
+    setValidationError(null)
+    clearConflicts()
+    setExpandedConflict(null)
+    lastSavedRef.current = null
       return
     }
 
@@ -67,6 +71,7 @@ export function NodeEditor() {
     setCharacters(selectedNode.characters ?? [])
     setSaveStatus("idle")
     setNewCharacterNotice(null)
+    setValidationError(null)
     clearConflicts()
     setExpandedConflict(null)
     lastSavedRef.current = JSON.stringify({
@@ -100,6 +105,18 @@ export function NodeEditor() {
     }
   }, [snapshotKey, saveStatus])
 
+  const validateSnapshot = useCallback((snapshot: typeof formSnapshot) => {
+    const narrativeValue = Number.parseInt(snapshot.narrativeOrder, 10)
+    if (!Number.isFinite(narrativeValue) || narrativeValue < 1) {
+      return "叙事顺序必须是大于等于 1 的整数"
+    }
+    const timelineValue = Number.parseFloat(snapshot.timelineOrder)
+    if (!Number.isFinite(timelineValue) || timelineValue <= 0) {
+      return "时间轴位置必须是大于 0 的数字"
+    }
+    return null
+  }, [])
+
   const buildNodePayload = useCallback(
     (snapshot: typeof formSnapshot): StoryNode | null => {
       if (!selectedNode) {
@@ -113,8 +130,8 @@ export function NodeEditor() {
         ...selectedNode,
         title: snapshot.title.trim() || "未命名节点",
         content: snapshot.content,
-        narrative_order: Number.isFinite(narrativeValue) ? narrativeValue : 0,
-        timeline_order: Number.isFinite(timelineValue) ? timelineValue : 0,
+        narrative_order: narrativeValue,
+        timeline_order: timelineValue,
         location_tag: snapshot.locationTag.trim() || "未标记",
         characters: snapshot.characters,
       }
@@ -128,6 +145,15 @@ export function NodeEditor() {
         return
       }
 
+      const error = validateSnapshot(snapshot)
+      if (error) {
+        setValidationError(error)
+        setSaveStatus("idle")
+        setSyncRequestId(null)
+        lastSavedRef.current = JSON.stringify(snapshot)
+        return
+      }
+
       const payload = buildNodePayload(snapshot)
       if (!payload) {
         return
@@ -138,11 +164,14 @@ export function NodeEditor() {
       abortControllerRef.current = controller
       saveCounterRef.current += 1
       const saveId = saveCounterRef.current
+      const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+      setSyncRequestId(requestId)
 
       setSaveStatus("saving")
+      setSyncStatus("syncing")
 
       try {
-        const response = await syncNode(currentProject.id, payload, {
+        const response = await syncNode(currentProject.id, payload, requestId, {
           signal: controller.signal,
         })
         if (saveCounterRef.current !== saveId) {
@@ -170,7 +199,15 @@ export function NodeEditor() {
         ;(response.conflicts ?? []).forEach((conflict) =>
           addConflict(conflict)
         )
+        if (response.sync_status === "completed") {
+          setSyncStatus("completed")
+          setSyncRequestId(null)
+        } else if (response.sync_status === "failed") {
+          setSyncStatus("failed")
+          setSyncRequestId(null)
+        }
         setExpandedConflict(null)
+        setValidationError(null)
         lastSavedRef.current = JSON.stringify(snapshot)
         setSaveStatus("saved")
       } catch (error) {
@@ -178,9 +215,22 @@ export function NodeEditor() {
           return
         }
         setSaveStatus("idle")
+        setSyncStatus("failed")
+        setSyncRequestId(null)
       }
     },
-    [buildNodePayload, currentProject, selectedNode, setProject, setSaveStatus]
+    [
+      addConflict,
+      buildNodePayload,
+      clearConflicts,
+      currentProject,
+      selectedNode,
+      setProject,
+      setSaveStatus,
+      setSyncRequestId,
+      setSyncStatus,
+      validateSnapshot,
+    ]
   )
 
   useEffect(() => {
@@ -220,6 +270,7 @@ export function NodeEditor() {
         : [...prev, characterId]
     )
     setSaveStatus("idle")
+    setValidationError(null)
   }
 
   const handleChange =
@@ -227,6 +278,7 @@ export function NodeEditor() {
       abortControllerRef.current?.abort()
       setter(event.target.value)
       setSaveStatus("idle")
+      setValidationError(null)
     }
 
   if (!selectedNode) {
@@ -268,6 +320,11 @@ export function NodeEditor() {
         {newCharacterNotice ? (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
             {newCharacterNotice}
+          </div>
+        ) : null}
+        {validationError ? (
+          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+            {validationError}
           </div>
         ) : null}
         {conflicts.length > 0 ? (

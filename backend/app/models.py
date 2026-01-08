@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .knowledge_graph import KnowledgeGraph
+from .world_knowledge import WorldDocument
 
 class StoryNode(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
@@ -148,6 +150,7 @@ class CreateOutlineRequest(BaseModel):
 class SyncNodeRequest(BaseModel):
     project_id: str
     node: StoryNode
+    request_id: str | None = None
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -219,6 +222,40 @@ class ProjectStatsResponse(BaseModel):
     total_words: int
     graph_entities: int
     graph_relations: int
+
+
+class ProjectUpdateRequest(BaseModel):
+    title: str
+
+
+class ProjectExportData(BaseModel):
+    project: StoryProject
+    knowledge_graph: KnowledgeGraph
+    world_documents: list[WorldDocument] = Field(default_factory=list)
+    snapshots: list[dict] = Field(default_factory=list)
+
+
+class CharacterGraphNode(BaseModel):
+    id: str
+    name: str
+    type: str | None = None
+    description: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    properties: dict = Field(default_factory=dict)
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class CharacterGraphLink(BaseModel):
+    source: str
+    target: str
+    relation_type: str | None = None
+    relation_name: str | None = None
+    description: str | None = None
+
+
+class CharacterGraphResponse(BaseModel):
+    nodes: list[CharacterGraphNode] = Field(default_factory=list)
+    links: list[CharacterGraphLink] = Field(default_factory=list)
 
 
 class VersionCreateRequest(BaseModel):

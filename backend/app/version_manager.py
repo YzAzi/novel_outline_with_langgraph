@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 
 from .knowledge_graph import KnowledgeGraph, load_graph
@@ -9,6 +10,9 @@ from .version_storage import VersionStorage
 from .versioning import IndexSnapshot, SnapshotType, VersionDiff, VersioningConfig
 from .crud import get_project, list_projects
 from .database import AsyncSessionLocal
+from .world_knowledge import WorldKnowledgeManager, WorldDocument
+
+logger = logging.getLogger(__name__)
 
 
 class VersionManager:
@@ -16,9 +20,11 @@ class VersionManager:
         self,
         storage: VersionStorage | None = None,
         config: VersioningConfig | None = None,
+        world_knowledge: WorldKnowledgeManager | None = None,
     ) -> None:
         self._storage = storage or VersionStorage()
         self._config = config or VersioningConfig()
+        self._world_knowledge = world_knowledge or WorldKnowledgeManager()
 
     async def create_snapshot(
         self,
@@ -30,6 +36,7 @@ class VersionManager:
     ) -> IndexSnapshot:
         latest_version = await self._get_latest_version(project.id)
         version = latest_version + 1
+        world_documents = await self._world_knowledge.list_project_documents(project.id)
         snapshot = IndexSnapshot(
             version=version,
             snapshot_type=snapshot_type,
@@ -37,6 +44,7 @@ class VersionManager:
             description=description,
             story_project=project,
             knowledge_graph=graph,
+            world_documents=world_documents,
             node_count=len(project.nodes),
             entity_count=len(graph.entities),
             created_at=datetime.utcnow(),
@@ -47,9 +55,13 @@ class VersionManager:
 
     async def restore_snapshot(
         self, project_id: str, version: int
-    ) -> tuple[StoryProject, KnowledgeGraph]:
+    ) -> tuple[StoryProject, KnowledgeGraph, list[WorldDocument]]:
         snapshot = await self._storage.load_snapshot(project_id, version)
-        return snapshot.story_project, snapshot.knowledge_graph
+        return (
+            snapshot.story_project,
+            snapshot.knowledge_graph,
+            snapshot.world_documents,
+        )
 
     async def load_snapshot(self, project_id: str, version: int) -> IndexSnapshot:
         return await self._storage.load_snapshot(project_id, version)
@@ -111,7 +123,16 @@ class VersionManager:
         snapshots_sorted = sorted(snapshots, key=lambda item: item["version"])
         words_by_version: dict[int, int] = {}
         for item in snapshots_sorted:
-            snapshot = await self._storage.load_snapshot(project_id, item["version"])
+            try:
+                snapshot = await self._storage.load_snapshot(project_id, item["version"])
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load snapshot %s v%s: %s",
+                    project_id,
+                    item["version"],
+                    exc,
+                )
+                continue
             words_by_version[item["version"]] = self._count_words(
                 snapshot.story_project.nodes
             )
@@ -119,7 +140,13 @@ class VersionManager:
         changes_by_version: dict[int, dict[str, int]] = {}
         prev_words: int | None = None
         for item in snapshots_sorted:
-            current_words = words_by_version[item["version"]]
+            current_words = words_by_version.get(item["version"])
+            if current_words is None:
+                changes_by_version[item["version"]] = {
+                    "words_added": 0,
+                    "words_removed": 0,
+                }
+                continue
             if prev_words is None:
                 changes_by_version[item["version"]] = {
                     "words_added": 0,
@@ -146,6 +173,13 @@ class VersionManager:
         if target.get("snapshot_type") == SnapshotType.MILESTONE.value:
             raise ValueError("Milestone snapshots cannot be deleted")
         await self._storage.delete_snapshot(project_id, version)
+
+    async def delete_project_data(self, project_id: str) -> None:
+        await self._storage.delete_project_data(project_id)
+
+    async def import_snapshots(self, snapshots: list[IndexSnapshot]) -> None:
+        for snapshot in snapshots:
+            await self._storage.save_snapshot(snapshot)
 
     async def create_pre_sync_snapshot_if_needed(
         self,

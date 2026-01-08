@@ -136,6 +136,7 @@ class SyncNodeResponse(BaseModel):
     project: StoryProject
     sync_result: "SyncResult"
     conflicts: list[Conflict] = Field(default_factory=list)
+    sync_status: str = "pending"
 
 
 from .index_sync import SyncResult  # noqa: E402

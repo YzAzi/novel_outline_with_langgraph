@@ -7,12 +7,16 @@ import { WebSocketClient } from "@/src/lib/websocket"
 import { useProjectStore } from "@/src/stores/project-store"
 
 type NodeUpdatedPayload = { node?: StoryNode }
+type SyncPayload = { details?: { node_id?: string; request_id?: string } }
 
 export function useWebsocket(projectId: string | null) {
   const clientRef = useRef<WebSocketClient | null>(null)
   const {
     addConflict,
     clearConflicts,
+    syncRequestId,
+    selectedNodeId,
+    setSyncRequestId,
     setSyncStatus,
     setWsStatus,
     updateGraphFromServer,
@@ -55,16 +59,42 @@ export function useWebsocket(projectId: string | null) {
       }
     })
 
-    const unsubscribeSyncStart = client.on("sync_started", () => {
+    const shouldHandleSync = (payload: SyncPayload) => {
+      const nodeId = payload?.details?.node_id
+      const requestId = payload?.details?.request_id
+      if (syncRequestId) {
+        return requestId === syncRequestId
+      }
+      if (requestId) {
+        return false
+      }
+      if (!nodeId) {
+        return false
+      }
+      return nodeId === selectedNodeId
+    }
+
+    const unsubscribeSyncStart = client.on("sync_started", (payload) => {
+      if (!shouldHandleSync(payload as SyncPayload)) {
+        return
+      }
       setSyncStatus("syncing")
     })
 
-    const unsubscribeSyncCompleted = client.on("sync_completed", () => {
+    const unsubscribeSyncCompleted = client.on("sync_completed", (payload) => {
+      if (!shouldHandleSync(payload as SyncPayload)) {
+        return
+      }
       setSyncStatus("completed")
+      setSyncRequestId(null)
     })
 
-    const unsubscribeSyncFailed = client.on("sync_failed", () => {
+    const unsubscribeSyncFailed = client.on("sync_failed", (payload) => {
+      if (!shouldHandleSync(payload as SyncPayload)) {
+        return
+      }
       setSyncStatus("failed")
+      setSyncRequestId(null)
     })
 
     return () => {
@@ -80,7 +110,10 @@ export function useWebsocket(projectId: string | null) {
   }, [
     addConflict,
     clearConflicts,
+    syncRequestId,
     projectId,
+    selectedNodeId,
+    setSyncRequestId,
     setSyncStatus,
     setWsStatus,
     updateGraphFromServer,

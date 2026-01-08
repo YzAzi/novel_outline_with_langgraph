@@ -1,6 +1,7 @@
 import type { CharacterGraphResponse } from "@/src/types/character-graph"
 import type {
   CreateOutlineRequest,
+  ProjectExportData,
   ProjectSummary,
   ProjectStatsResponse,
   SearchResult,
@@ -11,9 +12,9 @@ import type {
   SyncNodeResponse,
   WorldDocument,
   WorldKnowledgeBase,
-} from "@/types/models"
+} from "@/src/types/models"
 import type { CharacterGraphNode } from "@/src/types/character-graph"
-import { useProjectStore } from "@/stores/project-store"
+import { useProjectStore } from "@/src/stores/project-store"
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
@@ -69,13 +70,14 @@ export async function createOutline(
 export async function syncNode(
   projectId: string,
   node: StoryNode,
+  requestId?: string,
   options: { signal?: AbortSignal } = {},
 ): Promise<SyncNodeResponse> {
   return request<SyncNodeResponse>(
     "/api/sync_node",
     {
       method: "POST",
-      body: JSON.stringify({ project_id: projectId, node }),
+      body: JSON.stringify({ project_id: projectId, node, request_id: requestId }),
       signal: options.signal,
     },
     { showLoading: false },
@@ -118,6 +120,51 @@ export async function getProject(
     `/api/projects/${encodeURIComponent(projectId)}`,
     {
       method: "GET",
+      signal: options.signal,
+    },
+    { showLoading: false },
+  )
+}
+
+export async function updateProjectTitle(
+  projectId: string,
+  payload: { title: string },
+  options: { signal?: AbortSignal } = {},
+): Promise<StoryProject> {
+  return request<StoryProject>(
+    `/api/projects/${encodeURIComponent(projectId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+      signal: options.signal,
+    },
+    { showLoading: false },
+  )
+}
+
+export async function exportProject(
+  projectId: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<ProjectExportData> {
+  return request<ProjectExportData>(
+    `/api/projects/${encodeURIComponent(projectId)}/export`,
+    {
+      method: "GET",
+      signal: options.signal,
+    },
+    { showLoading: false },
+  )
+}
+
+export async function importProject(
+  payload: ProjectExportData,
+  options: { signal?: AbortSignal } = {},
+): Promise<StoryProject> {
+  return request<StoryProject>(
+    "/api/projects/import",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
       signal: options.signal,
     },
     { showLoading: false },

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from .knowledge_graph import Entity, KnowledgeGraph, Relation
+from .knowledge_graph import Entity, EntityType, KnowledgeGraph, Relation
 
 
 class GraphEditor:
@@ -15,9 +15,9 @@ class GraphEditor:
             entity = self._find_entity(entity_id)
             if entity is None:
                 raise ValueError("Entity not found")
-            for key, value in updates.items():
-                if hasattr(entity, key):
-                    setattr(entity, key, value)
+            normalized_updates = self._normalize_entity_updates(updates)
+            for key, value in normalized_updates.items():
+                setattr(entity, key, value)
             self._touch_graph()
             return entity
         except Exception:
@@ -92,6 +92,46 @@ class GraphEditor:
             if entity.id == entity_id:
                 return entity
         return None
+
+    def _normalize_entity_updates(self, updates: dict) -> dict:
+        allowed_fields = {
+            "name",
+            "type",
+            "description",
+            "aliases",
+            "properties",
+            "source_refs",
+        }
+        normalized: dict = {}
+        for key, value in updates.items():
+            if key not in allowed_fields:
+                raise ValueError(f"Unsupported field: {key}")
+            if key == "type":
+                if isinstance(value, EntityType):
+                    normalized[key] = value
+                elif isinstance(value, str):
+                    normalized[key] = EntityType(value)
+                else:
+                    raise ValueError("Invalid entity type")
+                continue
+            if key in {"aliases", "source_refs"}:
+                if not isinstance(value, list) or not all(
+                    isinstance(item, str) for item in value
+                ):
+                    raise ValueError(f"Invalid {key} value")
+                normalized[key] = value
+                continue
+            if key == "properties":
+                if not isinstance(value, dict):
+                    raise ValueError("Invalid properties value")
+                normalized[key] = value
+                continue
+            if key in {"name", "description"}:
+                if not isinstance(value, str):
+                    raise ValueError(f"Invalid {key} value")
+                normalized[key] = value
+                continue
+        return normalized
 
     def _dedupe_relations(self) -> None:
         unique: dict[tuple[str, str, str, str], Relation] = {}

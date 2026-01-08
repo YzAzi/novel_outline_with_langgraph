@@ -119,3 +119,11 @@ async def delete_by_ids(
 ) -> None:
     collection = _get_collection(collection_name)
     await asyncio.to_thread(collection.delete, ids=ids)
+
+
+async def delete_by_filter(
+    collection_name: str,
+    filter_dict: dict,
+) -> None:
+    collection = _get_collection(collection_name)
+    await asyncio.to_thread(collection.delete, where=filter_dict)

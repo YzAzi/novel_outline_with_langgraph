@@ -11,7 +11,7 @@ import { NodeEditor } from "@/components/node-editor"
 import { StoryVisualizer } from "@/components/story-visualizer"
 import { SyncIndicator } from "@/components/sync-indicator"
 import { VersionHistory } from "@/components/version-history"
-import { createVersion } from "@/src/lib/api"
+import { createVersion, updateProjectTitle } from "@/src/lib/api"
 import { useWebsocket } from "@/src/hooks/use-websocket"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -30,12 +30,14 @@ export default function Home() {
     saveStatus,
     setError,
     setProject,
+    setProjectTitle,
   } = useProjectStore()
   const [layoutDirection, setLayoutDirection] = useState<"horizontal" | "vertical">("horizontal")
   const [activeTab, setActiveTab] = useState("outline")
   const [title, setTitle] = useState(DEFAULT_TITLE)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [versionOpen, setVersionOpen] = useState(false)
+  const [isSavingTitle, setIsSavingTitle] = useState(false)
 
   useWebsocket(currentProject?.id ?? null)
 
@@ -85,8 +87,28 @@ export default function Home() {
 
   const handleTitleChange = (value: string) => {
     setTitle(value)
-    if (currentProject) {
-      setProject({ ...currentProject, title: value, updated_at: new Date().toISOString() })
+  }
+
+  const handleSaveTitle = async () => {
+    if (!currentProject) {
+      return
+    }
+    const nextTitle = title.trim()
+    if (!nextTitle) {
+      setError("项目标题不能为空")
+      return
+    }
+    setIsSavingTitle(true)
+    try {
+      const updated = await updateProjectTitle(currentProject.id, { title: nextTitle })
+      setProject(updated)
+      setTitle(updated.title)
+      setProjectTitle(updated.id, updated.title, updated.updated_at)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "保存项目标题失败"
+      setError(message)
+    } finally {
+      setIsSavingTitle(false)
     }
   }
 
@@ -108,8 +130,13 @@ export default function Home() {
               onChange={(event) => handleTitleChange(event.target.value)}
               className="text-lg font-semibold"
             />
-            <Button variant="ghost" size="sm">
-              保存
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleSaveTitle}
+              disabled={isSavingTitle}
+            >
+              {isSavingTitle ? "保存中..." : "保存"}
             </Button>
             <div className="text-xs text-muted-foreground">
               {saveStatus === "saving"

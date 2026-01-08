@@ -8,10 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .chunking import ChunkConfig, ChunkingStrategy, chunk_text
-from .vectorstore import SearchResult, add_documents, delete_by_ids, search_similar
+from .vectorstore import SearchResult, add_documents, delete_by_filter, delete_by_ids, search_similar
+from .bm25 import BM25
+from .text_utils import keyword_score, tokenize
 
 
 class WorldDocument(BaseModel):
@@ -20,7 +22,7 @@ class WorldDocument(BaseModel):
     title: str
     category: str
     content: str
-    chunks: list[str] = []
+    chunks: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -130,7 +132,17 @@ def _split_markdown_sections(markdown_content: str) -> list[tuple[str, str]]:
     return [(title, "\n".join(body).strip()) for title, body in sections]
 
 
+def _build_snippet(document: WorldDocument, limit: int = 180) -> str:
+    content = document.content.strip().replace("\n", " ")
+    if len(content) > limit:
+        content = f"{content[: limit - 3]}..."
+    return f"{document.title}（{document.category}）：{content}"
+
+
 class WorldKnowledgeManager:
+    async def list_project_documents(self, project_id: str) -> list[WorldDocument]:
+        return _load_project_documents(project_id)
+
     async def add_document(
         self,
         project_id: str,
@@ -262,6 +274,47 @@ class WorldKnowledgeManager:
             filter_dict=filter_dict,
         )
 
+    async def search_knowledge_keyword(
+        self,
+        project_id: str,
+        query: str,
+        top_k: int = 6,
+    ) -> list[str]:
+        documents = _load_project_documents(project_id)
+        tokens = tokenize(query)
+        scored: list[tuple[WorldDocument, int]] = []
+        for document in documents:
+            text = f"{document.title}\n{document.category}\n{document.content}"
+            score = keyword_score(tokens, text)
+            if score > 0:
+                scored.append((document, score))
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return [_build_snippet(doc) for doc, _score in scored[:top_k]]
+
+    async def search_bm25_snippets(
+        self,
+        project_id: str,
+        query: str,
+        top_k: int = 6,
+    ) -> list[tuple[str, float, WorldDocument]]:
+        documents = _load_project_documents(project_id)
+        tokens = tokenize(query)
+        corpus = [
+            tokenize(f"{doc.title}\n{doc.category}\n{doc.content}")
+            for doc in documents
+        ]
+        bm25 = BM25(corpus)
+        scored = [
+            (doc, bm25.score(tokens, index))
+            for index, doc in enumerate(documents)
+        ]
+        scored = [item for item in scored if item[1] > 0]
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return [
+            (_build_snippet(doc), float(score), doc)
+            for doc, score in scored[:top_k]
+        ]
+
     async def get_knowledge_base(self, project_id: str) -> WorldKnowledgeBase:
         documents = _load_project_documents(project_id)
         total_chunks = sum(len(doc.chunks) for doc in documents)
@@ -347,6 +400,67 @@ class WorldKnowledgeManager:
             await delete_by_ids("world_knowledge", document.chunks)
         documents = [item for item in documents if item.id != doc_id]
         _save_project_documents(project_id, documents)
+
+    async def delete_project_data(self, project_id: str) -> None:
+        documents = _load_project_documents(project_id)
+        chunk_ids = [chunk_id for doc in documents for chunk_id in doc.chunks]
+        if chunk_ids:
+            await delete_by_ids("world_knowledge", chunk_ids)
+        await delete_by_filter("world_knowledge", {"project_id": project_id})
+        path = _project_file(project_id)
+        with _file_lock(path):
+            if path.exists():
+                path.unlink()
+
+    async def replace_project_documents(
+        self,
+        project_id: str,
+        documents: list[WorldDocument],
+        chunking_config: ChunkConfig | None = None,
+    ) -> list[WorldDocument]:
+        await self.delete_project_data(project_id)
+        if not documents:
+            return []
+
+        config = chunking_config or _default_chunking_config()
+        restored: list[WorldDocument] = []
+        for doc in documents:
+            restored_doc = WorldDocument(
+                id=doc.id,
+                project_id=project_id,
+                title=doc.title,
+                category=doc.category,
+                content=doc.content,
+                chunks=[],
+                created_at=doc.created_at,
+                updated_at=doc.updated_at,
+            )
+            chunks = chunk_text(
+                doc.content,
+                config,
+                source_metadata={"project_id": project_id, "document_id": restored_doc.id},
+            )
+            if chunks:
+                restored_doc.chunks = [chunk.id for chunk in chunks]
+                await add_documents(
+                    collection_name="world_knowledge",
+                    documents=[chunk.content for chunk in chunks],
+                    metadatas=[
+                        _build_chunk_metadata(
+                            project_id,
+                            restored_doc,
+                            index,
+                            chunk.start_index,
+                            chunk.end_index,
+                        )
+                        for index, chunk in enumerate(chunks)
+                    ],
+                    ids=[chunk.id for chunk in chunks],
+                )
+            restored.append(restored_doc)
+
+        _save_project_documents(project_id, restored)
+        return restored
 
     async def import_from_markdown(
         self,

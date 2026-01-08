@@ -1,7 +1,12 @@
 import { create } from "zustand"
 
 import { deleteProject, getProject, getProjects } from "@/src/lib/api"
-import type { Conflict, ProjectSummary, StoryNode, StoryProject } from "@/types/models"
+import type {
+  Conflict,
+  ProjectSummary,
+  StoryNode,
+  StoryProject,
+} from "@/src/types/models"
 
 interface ProjectStore {
   currentProject: StoryProject | null
@@ -10,16 +15,20 @@ interface ProjectStore {
   projects: ProjectSummary[]
   saveStatus: "idle" | "saving" | "saved"
   syncStatus: "idle" | "syncing" | "completed" | "failed"
+  syncRequestId: string | null
   conflicts: Array<Conflict & { _id: string }>
   graphUpdateVersion: number
   isLoading: boolean
   error: string | null
 
   setProject: (project: StoryProject) => void
+  replaceProject: (project: StoryProject) => void
+  setProjectTitle: (projectId: string, title: string, updatedAt: string) => void
   selectNode: (nodeId: string | null) => void
   setHighlightedNodes: (nodeIds: string[]) => void
   setSaveStatus: (status: "idle" | "saving" | "saved") => void
   setSyncStatus: (status: "idle" | "syncing" | "completed" | "failed") => void
+  setSyncRequestId: (requestId: string | null) => void
   loadProjects: () => Promise<void>
   loadProject: (projectId: string) => Promise<void>
   removeProject: (projectId: string) => Promise<void>
@@ -42,6 +51,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   projects: [],
   saveStatus: "idle",
   syncStatus: "idle",
+  syncRequestId: null,
   conflicts: [],
   graphUpdateVersion: 0,
   wsStatus: "disconnected",
@@ -49,16 +59,50 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   error: null,
 
   setProject: (project) =>
-    set({
+    set((state) => ({
       currentProject: project,
       error: null,
       highlightedNodeIds: [],
       saveStatus: "idle",
-    }),
+      syncStatus: "idle",
+      syncRequestId: null,
+      projects: state.projects.some((item) => item.id === project.id)
+        ? state.projects.map((item) =>
+            item.id === project.id
+              ? { ...item, title: project.title, updated_at: project.updated_at }
+              : item
+          )
+        : [
+            ...state.projects,
+            { id: project.id, title: project.title, updated_at: project.updated_at },
+          ],
+    })),
+  replaceProject: (project) =>
+    set((state) => ({
+      currentProject: project,
+      error: null,
+      highlightedNodeIds: [],
+      saveStatus: "idle",
+      syncStatus: "idle",
+      syncRequestId: null,
+      conflicts: [],
+      selectedNodeId: null,
+      projects: state.projects.some((item) => item.id === project.id)
+        ? state.projects.map((item) =>
+            item.id === project.id
+              ? { ...item, title: project.title, updated_at: project.updated_at }
+              : item
+          )
+        : [
+            ...state.projects,
+            { id: project.id, title: project.title, updated_at: project.updated_at },
+          ],
+    })),
   selectNode: (nodeId) => set({ selectedNodeId: nodeId }),
   setHighlightedNodes: (nodeIds) => set({ highlightedNodeIds: nodeIds }),
   setSaveStatus: (status) => set({ saveStatus: status }),
   setSyncStatus: (status) => set({ syncStatus: status }),
+  setSyncRequestId: (requestId) => set({ syncRequestId: requestId }),
   loadProjects: async () => {
     const { setError } = get()
     try {
@@ -144,6 +188,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   updateGraphFromServer: (_changes) => {
     set((state) => ({
       graphUpdateVersion: state.graphUpdateVersion + 1,
+    }))
+  },
+  setProjectTitle: (projectId, title, updatedAt) => {
+    set((state) => ({
+      projects: state.projects.map((project) =>
+        project.id === projectId
+          ? { ...project, title, updated_at: updatedAt }
+          : project
+      ),
     }))
   },
   addConflict: (conflict) => {

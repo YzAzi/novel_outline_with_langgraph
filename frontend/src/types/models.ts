@@ -62,6 +62,7 @@ export interface SyncNodeResponse {
   project: StoryProject
   sync_result: SyncResult
   conflicts: Conflict[]
+  sync_status?: "pending" | "completed" | "failed"
 }
 
 export interface WorldDocument {
@@ -80,6 +81,13 @@ export interface WorldKnowledgeBase {
   documents: WorldDocument[]
   total_chunks: number
   total_characters: number
+}
+
+export interface KnowledgeGraph {
+  project_id: string
+  entities: unknown[]
+  relations: unknown[]
+  last_updated: string
 }
 
 export interface SearchResult {
@@ -106,12 +114,8 @@ export interface IndexSnapshot {
   name: string | null
   description: string | null
   story_project: StoryProject
-  knowledge_graph: {
-    project_id: string
-    entities: unknown[]
-    relations: unknown[]
-    last_updated: string
-  }
+  knowledge_graph: KnowledgeGraph
+  world_documents?: WorldDocument[]
   node_count: number
   entity_count: number
   created_at: string
@@ -134,4 +138,11 @@ export interface CreateOutlineRequest {
   style_tags: string[]
   initial_prompt: string
   base_project_id?: string | null
+}
+
+export interface ProjectExportData {
+  project: StoryProject
+  knowledge_graph: KnowledgeGraph
+  world_documents: WorldDocument[]
+  snapshots: IndexSnapshot[]
 }

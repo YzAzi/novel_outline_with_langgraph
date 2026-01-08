@@ -91,6 +91,12 @@ def save_graph(graph: KnowledgeGraph) -> None:
     )
 
 
+def delete_graph(project_id: str) -> None:
+    path = _graph_file(project_id)
+    if path.exists():
+        path.unlink()
+
+
 def new_entity_id() -> str:
     return str(uuid4())
 

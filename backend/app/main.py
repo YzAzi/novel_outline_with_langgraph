@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import re
 import time
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
@@ -9,12 +11,15 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .crud import create_project, delete_project, get_project, list_projects, update_project
-from .database import get_session, init_db
+from .database import AsyncSessionLocal, get_session, init_db
 from .conflict_detector import ConflictDetector, SyncNodeResponse
 from .graph import run_drafting_workflow, run_sync_workflow
-from .knowledge_graph import load_graph, save_graph
+from .knowledge_graph import delete_graph, load_graph, save_graph
 from .models import (
     CreateOutlineRequest,
+    CharacterGraphLink,
+    CharacterGraphNode,
+    CharacterGraphResponse,
     HealthResponse,
     KnowledgeDocumentRequest,
     KnowledgeImportRequest,
@@ -22,6 +27,8 @@ from .models import (
     KnowledgeUpdateRequest,
     ProjectStatsResponse,
     ProjectSummary,
+    ProjectUpdateRequest,
+    ProjectExportData,
     StoryProject,
     SyncNodeRequest,
     VersionCreateRequest,
@@ -53,6 +60,14 @@ app = FastAPI(
     description="FastAPI service for drafting and syncing story outlines.",
     version="0.1.0",
 )
+
+
+def _count_words(text: str) -> int:
+    if not text:
+        return 0
+    cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
+    tokens = re.findall(r"[A-Za-z0-9]+", text)
+    return len(cjk_chars) + len(tokens)
 
 app.add_middleware(
     CORSMiddleware,
@@ -131,8 +146,11 @@ async def sync_node(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
 
+    request_id = payload.request_id
     await notifier.notify_sync_progress(
-        payload.project_id, "started", {"node_id": payload.node.id}
+        payload.project_id,
+        "started",
+        {"node_id": payload.node.id, "request_id": request_id},
     )
 
     old_node = next(
@@ -160,71 +178,117 @@ async def sync_node(
     )
 
     sync_result = SyncResult(success=True, vector_updated=False, graph_updated=False)
+    sync_status = "pending"
+
+    async def _load_latest_project() -> StoryProject | None:
+        async with AsyncSessionLocal() as session:
+            return await get_project(session, payload.project_id)
 
     async def sync_graph_background() -> None:
         nonlocal sync_result
         try:
-            if DEFAULT_SYNC_CONFIG.graph_sync_mode == SyncMode.IMMEDIATE:
-                current_graph = load_graph(payload.project_id)
-                sync_result = await index_sync_manager.sync_node_update(
-                    project_id=payload.project_id,
+            if DEFAULT_SYNC_CONFIG.vector_sync_mode == SyncMode.IMMEDIATE:
+                await index_sync_manager.node_indexer.index_node(
+                    payload.project_id, updated_node
+                )
+                sync_result.vector_updated = True
+            if DEFAULT_SYNC_CONFIG.graph_sync_mode in (
+                SyncMode.DEBOUNCED,
+                SyncMode.BATCH,
+            ):
+                await sync_queue.enqueue(
+                    payload.project_id,
+                    updated_node,
                     old_node=old_node,
-                    new_node=updated_node,
-                    current_graph=current_graph,
                 )
-                save_graph(current_graph)
-                await notifier.notify_graph_updated(
-                    payload.project_id, sync_result.model_dump()
-                )
-            else:
-                if DEFAULT_SYNC_CONFIG.vector_sync_mode == SyncMode.IMMEDIATE:
-                    await index_sync_manager.node_indexer.index_node(
-                        payload.project_id, updated_node
+                results = await sync_queue.process_ready(payload.project_id)
+                if not results:
+                    delay = (
+                        DEFAULT_SYNC_CONFIG.debounce_seconds
+                        if DEFAULT_SYNC_CONFIG.graph_sync_mode == SyncMode.DEBOUNCED
+                        else DEFAULT_SYNC_CONFIG.batch_timeout_seconds
                     )
-                    sync_result.vector_updated = True
-                if DEFAULT_SYNC_CONFIG.graph_sync_mode in (
-                    SyncMode.DEBOUNCED,
-                    SyncMode.BATCH,
-                ):
-                    await sync_queue.enqueue(
+                    await asyncio.sleep(delay)
+                    results = await sync_queue.process_ready(payload.project_id)
+                if results:
+                    await notifier.notify_graph_updated(
                         payload.project_id,
-                        updated_node,
-                        old_node=old_node,
+                        {"updates": [result.model_dump() for result in results]},
                     )
-                    results = await sync_queue.process_ready()
-                    if results:
-                        await notifier.notify_graph_updated(
-                            payload.project_id,
-                            {"updates": [result.model_dump() for result in results]},
+                    latest_project = await _load_latest_project()
+                    if latest_project:
+                        graph_snapshot = load_graph(payload.project_id)
+                        conflicts = await conflict_detector.detect_conflicts(
+                            project=latest_project,
+                            graph=graph_snapshot,
+                            modified_node=updated_node,
                         )
+                        if conflicts:
+                            await notifier.notify_conflict_detected(
+                                payload.project_id,
+                                [conflict.model_dump() for conflict in conflicts],
+                            )
             await notifier.notify_sync_progress(
-                payload.project_id, "completed", {"node_id": payload.node.id}
+                payload.project_id,
+                "completed",
+                {"node_id": payload.node.id, "request_id": request_id},
             )
         except Exception as exc:
             await notifier.notify_sync_progress(
                 payload.project_id,
                 "failed",
-                {"error": str(exc), "node_id": payload.node.id},
+                {"error": str(exc), "node_id": payload.node.id, "request_id": request_id},
             )
 
-    def schedule_background_task() -> None:
-        asyncio.create_task(sync_graph_background())
+    conflicts: list = []
+    if DEFAULT_SYNC_CONFIG.graph_sync_mode == SyncMode.IMMEDIATE:
+        try:
+            current_graph = load_graph(payload.project_id)
+            sync_result = await index_sync_manager.sync_node_update(
+                project_id=payload.project_id,
+                old_node=old_node,
+                new_node=updated_node,
+                current_graph=current_graph,
+            )
+            save_graph(current_graph)
+            await notifier.notify_graph_updated(
+                payload.project_id, sync_result.model_dump()
+            )
+            graph_snapshot = current_graph
+            conflicts = await conflict_detector.detect_conflicts(
+                project=updated_project,
+                graph=graph_snapshot,
+                modified_node=updated_node,
+            )
+            if conflicts:
+                await notifier.notify_conflict_detected(
+                    payload.project_id,
+                    [conflict.model_dump() for conflict in conflicts],
+                )
+            sync_status = "completed"
+            await notifier.notify_sync_progress(
+                payload.project_id,
+                "completed",
+                {"node_id": payload.node.id, "request_id": request_id},
+            )
+        except Exception as exc:
+            sync_result.success = False
+            sync_status = "failed"
+            await notifier.notify_sync_progress(
+                payload.project_id,
+                "failed",
+                {"error": str(exc), "node_id": payload.node.id, "request_id": request_id},
+            )
+    else:
+        def schedule_background_task() -> None:
+            asyncio.create_task(sync_graph_background())
 
-    background_tasks.add_task(schedule_background_task)
-    graph_snapshot = load_graph(payload.project_id)
-    conflicts = await conflict_detector.detect_conflicts(
-        project=updated_project,
-        graph=graph_snapshot,
-        modified_node=updated_node,
-    )
-    if conflicts:
-        await notifier.notify_conflict_detected(
-            payload.project_id, [conflict.model_dump() for conflict in conflicts]
-        )
+        background_tasks.add_task(schedule_background_task)
     return SyncNodeResponse(
         project=updated_project,
         sync_result=sync_result,
         conflicts=conflicts,
+        sync_status=sync_status,
     )
 
 
@@ -256,6 +320,99 @@ async def get_project_record(
     return project
 
 
+@app.get(
+    "/api/projects/{project_id}/export",
+    response_model=ProjectExportData,
+    status_code=status.HTTP_200_OK,
+)
+async def export_project_data(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    project = await get_project(session, project_id)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
+    graph = load_graph(project_id)
+    world_documents = await world_knowledge_manager.list_project_documents(project_id)
+    snapshot_records = await version_manager.list_versions(project_id)
+    snapshots = []
+    for record in snapshot_records:
+        try:
+            snapshot = await version_manager.load_snapshot(project_id, record["version"])
+            snapshots.append(snapshot.model_dump(mode="json"))
+        except Exception:
+            continue
+    return ProjectExportData(
+        project=project,
+        knowledge_graph=graph,
+        world_documents=world_documents,
+        snapshots=snapshots,
+    )
+
+
+@app.put(
+    "/api/projects/{project_id}",
+    response_model=StoryProject,
+    status_code=status.HTTP_200_OK,
+)
+async def update_project_record(
+    project_id: str,
+    payload: ProjectUpdateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    project = await get_project(session, project_id)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Title cannot be empty"
+        )
+    project.title = title
+    project.updated_at = datetime.utcnow()
+    await update_project(session, project_id, project)
+    return project
+
+
+@app.post(
+    "/api/projects/import",
+    response_model=StoryProject,
+    status_code=status.HTTP_200_OK,
+)
+async def import_project_data(
+    payload: ProjectExportData,
+    session: AsyncSession = Depends(get_session),
+):
+    project = payload.project
+    existing = await get_project(session, project.id)
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project already exists",
+        )
+    await create_project(session, project)
+    save_graph(payload.knowledge_graph)
+    await world_knowledge_manager.replace_project_documents(
+        project.id, payload.world_documents
+    )
+    snapshots = []
+    for item in payload.snapshots:
+        try:
+            snapshots.append(IndexSnapshot.model_validate(item))
+        except Exception:
+            continue
+    if snapshots:
+        await version_manager.import_snapshots(snapshots)
+    node_indexer = NodeIndexer()
+    await node_indexer.clear_project(project.id)
+    await node_indexer.index_project(project)
+    return project
+
+
 @app.delete(
     "/api/projects/{project_id}",
     status_code=status.HTTP_200_OK,
@@ -272,8 +429,14 @@ async def delete_project_record(
         )
     if project:
         node_indexer = NodeIndexer()
-        for node in project.nodes:
-            await node_indexer.remove_node(project_id, node.id)
+        await node_indexer.clear_project(project_id)
+        logger.info("Deleted project %s nodes from vector index", project_id)
+        await world_knowledge_manager.delete_project_data(project_id)
+        logger.info("Deleted project %s world knowledge data", project_id)
+        delete_graph(project_id)
+        logger.info("Deleted project %s knowledge graph data", project_id)
+        await version_manager.delete_project_data(project_id)
+        logger.info("Deleted project %s version snapshots", project_id)
     return {"deleted": True}
 
 
@@ -452,7 +615,14 @@ async def upload_world_knowledge(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported file type"
         )
 
-    content = (await file.read()).decode("utf-8")
+    raw = await file.read()
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file encoding (expected UTF-8)",
+        )
     if filename.endswith(".md"):
         documents = await world_knowledge_manager.import_from_markdown(
             project_id=project_id,
@@ -486,11 +656,12 @@ async def get_project_stats(
         )
     knowledge_base = await world_knowledge_manager.get_knowledge_base(project_id)
     graph_snapshot = load_graph(project_id)
+    total_words = sum(_count_words(doc.content) for doc in knowledge_base.documents)
     return ProjectStatsResponse(
         total_nodes=len(project.nodes),
         total_characters=len(project.characters),
         total_knowledge_docs=len(knowledge_base.documents),
-        total_words=knowledge_base.total_characters,
+        total_words=total_words,
         graph_entities=len(graph_snapshot.entities),
         graph_relations=len(graph_snapshot.relations),
     )
@@ -591,11 +762,17 @@ async def restore_project_version(
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     try:
-        restored_project, restored_graph = await version_manager.restore_snapshot(project_id, version)
+        restored_project, restored_graph, restored_docs = await version_manager.restore_snapshot(
+            project_id, version
+        )
     except FileNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
     await update_project(session, restored_project.id, restored_project)
     save_graph(restored_graph)
+    node_indexer = NodeIndexer()
+    await node_indexer.clear_project(project_id)
+    await node_indexer.index_project(restored_project)
+    await world_knowledge_manager.replace_project_documents(project_id, restored_docs)
     return restored_project
 
 
@@ -699,10 +876,14 @@ async def update_graph_entity(
     editor = GraphEditor(graph)
     try:
         entity = await editor.update_entity(entity_id, payload)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found"
+    except ValueError as exc:
+        detail = str(exc) or "Invalid entity update"
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if detail == "Entity not found"
+            else status.HTTP_400_BAD_REQUEST
         )
+        raise HTTPException(status_code=status_code, detail=detail)
     save_graph(graph)
     return entity.model_dump()
 
@@ -775,3 +956,49 @@ async def merge_graph_entities(
 )
 def health():
     return {"status": "ok", "version": "0.1.0"}
+
+
+@app.get(
+    "/api/character_graph",
+    response_model=CharacterGraphResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_character_graph(
+    project_id: str | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    if not project_id:
+        return CharacterGraphResponse()
+
+    project = await get_project(session, project_id)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
+
+    graph = load_graph(project_id)
+    nodes = [
+        CharacterGraphNode(
+            id=entity.id,
+            name=entity.name,
+            type=entity.type.value if hasattr(entity.type, "value") else str(entity.type),
+            description=entity.description,
+            aliases=entity.aliases,
+            properties=entity.properties or {},
+            source_refs=entity.source_refs,
+        )
+        for entity in graph.entities
+    ]
+    links = [
+        CharacterGraphLink(
+            source=relation.source_id,
+            target=relation.target_id,
+            relation_type=relation.relation_type.value
+            if hasattr(relation.relation_type, "value")
+            else str(relation.relation_type),
+            relation_name=relation.relation_name,
+            description=relation.description,
+        )
+        for relation in graph.relations
+    ]
+    return CharacterGraphResponse(nodes=nodes, links=links)

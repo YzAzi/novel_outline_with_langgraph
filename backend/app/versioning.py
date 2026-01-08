@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from .knowledge_graph import KnowledgeGraph
 from .models import StoryProject
+from .world_knowledge import WorldDocument
 
 
 class SnapshotType(str, Enum):
@@ -24,6 +25,7 @@ class IndexSnapshot(BaseModel):
     description: str | None = None
     story_project: StoryProject
     knowledge_graph: KnowledgeGraph
+    world_documents: list[WorldDocument] = Field(default_factory=list)
     node_count: int
     entity_count: int
     created_at: datetime = Field(default_factory=datetime.utcnow)

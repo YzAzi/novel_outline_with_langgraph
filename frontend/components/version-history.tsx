@@ -29,7 +29,7 @@ const TYPE_STYLES: Record<SnapshotType, string> = {
 }
 
 export function VersionHistory({ open, onClose }: VersionHistoryProps) {
-  const { currentProject, setError, setProject } = useProjectStore()
+  const { currentProject, setError, replaceProject } = useProjectStore()
   const [versions, setVersions] = useState<Array<{
     version: number
     snapshot_type: SnapshotType
@@ -148,7 +148,7 @@ export function VersionHistory({ open, onClose }: VersionHistoryProps) {
     }
     try {
       const restored = await restoreVersion(currentProject.id, selectedVersion)
-      setProject(restored)
+      replaceProject(restored)
       onClose()
     } catch (error) {
       const message = error instanceof Error ? error.message : "恢复版本失败"
