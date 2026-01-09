@@ -3,8 +3,8 @@
 import dynamic from "next/dynamic"
 import { useEffect, useMemo, useState } from "react"
 
-import "@uiw/react-md-editor/dist/mdeditor.css"
-import "@uiw/react-markdown-preview/dist/markdown.css"
+import "@uiw/react-md-editor/markdown-editor.css"
+import "@uiw/react-markdown-preview/markdown.css"
 
 import type { WorldDocument } from "@/src/types/models"
 import { Button } from "@/components/ui/button"

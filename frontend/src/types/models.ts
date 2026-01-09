@@ -146,3 +146,25 @@ export interface ProjectExportData {
   world_documents: WorldDocument[]
   snapshots: IndexSnapshot[]
 }
+
+export interface ModelConfigResponse {
+  base_url?: string | null
+  drafting_model: string
+  sync_model: string
+  extraction_model: string
+  has_default_key?: boolean
+  has_drafting_key?: boolean
+  has_sync_key?: boolean
+  has_extraction_key?: boolean
+}
+
+export interface ModelConfigUpdateRequest {
+  base_url?: string | null
+  default_api_key?: string | null
+  drafting_api_key?: string | null
+  sync_api_key?: string | null
+  extraction_api_key?: string | null
+  drafting_model?: string | null
+  sync_model?: string | null
+  extraction_model?: string | null
+}

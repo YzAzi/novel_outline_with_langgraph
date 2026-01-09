@@ -13,6 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .crud import create_project, delete_project, get_project, list_projects, update_project
 from .database import AsyncSessionLocal, get_session, init_db
 from .conflict_detector import ConflictDetector, SyncNodeResponse
+from .config import (
+    get_api_key,
+    get_base_url,
+    get_model_name,
+    set_api_key_override,
+    set_base_url_override,
+    set_model_override,
+    settings,
+)
 from .graph import run_drafting_workflow, run_sync_workflow
 from .knowledge_graph import delete_graph, load_graph, save_graph
 from .models import (
@@ -29,6 +38,8 @@ from .models import (
     ProjectSummary,
     ProjectUpdateRequest,
     ProjectExportData,
+    ModelConfigResponse,
+    ModelConfigUpdateRequest,
     StoryProject,
     SyncNodeRequest,
     VersionCreateRequest,
@@ -187,47 +198,71 @@ async def sync_node(
     async def sync_graph_background() -> None:
         nonlocal sync_result
         try:
-            if DEFAULT_SYNC_CONFIG.vector_sync_mode == SyncMode.IMMEDIATE:
+            async def sync_vector_with_delay(delay: int) -> None:
+                await asyncio.sleep(delay)
                 await index_sync_manager.node_indexer.index_node(
                     payload.project_id, updated_node
                 )
                 sync_result.vector_updated = True
-            if DEFAULT_SYNC_CONFIG.graph_sync_mode in (
-                SyncMode.DEBOUNCED,
-                SyncMode.BATCH,
-            ):
-                await sync_queue.enqueue(
-                    payload.project_id,
-                    updated_node,
-                    old_node=old_node,
-                )
-                results = await sync_queue.process_ready(payload.project_id)
-                if not results:
+
+            if DEFAULT_SYNC_CONFIG.graph_sync_mode == SyncMode.MANUAL:
+                if DEFAULT_SYNC_CONFIG.vector_sync_mode == SyncMode.IMMEDIATE:
+                    await index_sync_manager.node_indexer.index_node(
+                        payload.project_id, updated_node
+                    )
+                    sync_result.vector_updated = True
+                elif DEFAULT_SYNC_CONFIG.vector_sync_mode in (
+                    SyncMode.DEBOUNCED,
+                    SyncMode.BATCH,
+                ):
                     delay = (
                         DEFAULT_SYNC_CONFIG.debounce_seconds
-                        if DEFAULT_SYNC_CONFIG.graph_sync_mode == SyncMode.DEBOUNCED
+                        if DEFAULT_SYNC_CONFIG.vector_sync_mode == SyncMode.DEBOUNCED
                         else DEFAULT_SYNC_CONFIG.batch_timeout_seconds
                     )
-                    await asyncio.sleep(delay)
-                    results = await sync_queue.process_ready(payload.project_id)
-                if results:
-                    await notifier.notify_graph_updated(
-                        payload.project_id,
-                        {"updates": [result.model_dump() for result in results]},
+                    await sync_vector_with_delay(delay)
+            else:
+                if DEFAULT_SYNC_CONFIG.vector_sync_mode == SyncMode.IMMEDIATE:
+                    await index_sync_manager.node_indexer.index_node(
+                        payload.project_id, updated_node
                     )
-                    latest_project = await _load_latest_project()
-                    if latest_project:
-                        graph_snapshot = load_graph(payload.project_id)
-                        conflicts = await conflict_detector.detect_conflicts(
-                            project=latest_project,
-                            graph=graph_snapshot,
-                            modified_node=updated_node,
+                    sync_result.vector_updated = True
+                if DEFAULT_SYNC_CONFIG.graph_sync_mode in (
+                    SyncMode.DEBOUNCED,
+                    SyncMode.BATCH,
+                ):
+                    await sync_queue.enqueue(
+                        payload.project_id,
+                        updated_node,
+                        old_node=old_node,
+                    )
+                    results = await sync_queue.process_ready(payload.project_id)
+                    if not results:
+                        delay = (
+                            DEFAULT_SYNC_CONFIG.debounce_seconds
+                            if DEFAULT_SYNC_CONFIG.graph_sync_mode == SyncMode.DEBOUNCED
+                            else DEFAULT_SYNC_CONFIG.batch_timeout_seconds
                         )
-                        if conflicts:
-                            await notifier.notify_conflict_detected(
-                                payload.project_id,
-                                [conflict.model_dump() for conflict in conflicts],
+                        await asyncio.sleep(delay)
+                        results = await sync_queue.process_ready(payload.project_id)
+                    if results:
+                        await notifier.notify_graph_updated(
+                            payload.project_id,
+                            {"updates": [result.model_dump() for result in results]},
+                        )
+                        latest_project = await _load_latest_project()
+                        if latest_project:
+                            graph_snapshot = load_graph(payload.project_id)
+                            conflicts = await conflict_detector.detect_conflicts(
+                                project=latest_project,
+                                graph=graph_snapshot,
+                                modified_node=updated_node,
                             )
+                            if conflicts:
+                                await notifier.notify_conflict_detected(
+                                    payload.project_id,
+                                    [conflict.model_dump() for conflict in conflicts],
+                                )
             await notifier.notify_sync_progress(
                 payload.project_id,
                 "completed",
@@ -956,6 +991,58 @@ async def merge_graph_entities(
 )
 def health():
     return {"status": "ok", "version": "0.1.0"}
+
+
+@app.get(
+    "/api/models",
+    response_model=ModelConfigResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_model_config():
+    return ModelConfigResponse(
+        base_url=get_base_url(),
+        drafting_model=get_model_name("drafting"),
+        sync_model=get_model_name("sync"),
+        extraction_model=get_model_name("extraction"),
+        has_default_key=bool(get_api_key("default")),
+        has_drafting_key=bool(get_api_key("drafting")),
+        has_sync_key=bool(get_api_key("sync")),
+        has_extraction_key=bool(get_api_key("extraction")),
+    )
+
+
+@app.post(
+    "/api/models",
+    response_model=ModelConfigResponse,
+    status_code=status.HTTP_200_OK,
+)
+def update_model_config(payload: ModelConfigUpdateRequest):
+    if payload.base_url is not None:
+        set_base_url_override(payload.base_url)
+    if payload.default_api_key is not None:
+        set_api_key_override("default", payload.default_api_key)
+    if payload.drafting_api_key is not None:
+        set_api_key_override("drafting", payload.drafting_api_key)
+    if payload.sync_api_key is not None:
+        set_api_key_override("sync", payload.sync_api_key)
+    if payload.extraction_api_key is not None:
+        set_api_key_override("extraction", payload.extraction_api_key)
+    if payload.drafting_model is not None:
+        set_model_override("drafting", payload.drafting_model)
+    if payload.sync_model is not None:
+        set_model_override("sync", payload.sync_model)
+    if payload.extraction_model is not None:
+        set_model_override("extraction", payload.extraction_model)
+    return ModelConfigResponse(
+        base_url=get_base_url(),
+        drafting_model=get_model_name("drafting"),
+        sync_model=get_model_name("sync"),
+        extraction_model=get_model_name("extraction"),
+        has_default_key=bool(get_api_key("default")),
+        has_drafting_key=bool(get_api_key("drafting")),
+        has_sync_key=bool(get_api_key("sync")),
+        has_extraction_key=bool(get_api_key("extraction")),
+    )
 
 
 @app.get(

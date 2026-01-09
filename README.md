@@ -10,6 +10,12 @@
 - OPENAI_API_KEY：LLM 调用密钥
 - OPENAI_BASE_URL：LLM 接口地址（默认 OpenAI）
 - MODEL_NAME：模型名称
+- OPENAI_API_KEY_DRAFTING：大纲生成专用 key（可选，未填则回退 OPENAI_API_KEY）
+- OPENAI_API_KEY_SYNC：同步分析专用 key（可选，未填则回退 OPENAI_API_KEY）
+- OPENAI_API_KEY_EXTRACTION：实体抽取专用 key（可选，未填则回退 OPENAI_API_KEY）
+- MODEL_NAME_DRAFTING：大纲生成模型名（可选，未填则回退 MODEL_NAME）
+- MODEL_NAME_SYNC：同步分析模型名（可选，未填则回退 MODEL_NAME）
+- MODEL_NAME_EXTRACTION：实体抽取模型名（可选，未填则回退 MODEL_NAME）
 - CHROMA_PERSIST_PATH：向量库持久化目录（默认 backend/data/chroma_db）
 
 ## 项目结构

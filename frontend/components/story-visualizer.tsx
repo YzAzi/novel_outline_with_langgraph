@@ -3,7 +3,8 @@
 import "@xyflow/react/dist/style.css"
 
 import { useMemo, useCallback } from "react"
-import ReactFlow, {
+import {
+  ReactFlow,
   Background,
   Controls,
   MiniMap,
@@ -40,7 +41,9 @@ type StoryNodeData = {
   highlight: boolean
 }
 
-function StoryNodeCard({ data, selected }: NodeProps<StoryNodeData>) {
+type StoryFlowNode = Node<StoryNodeData, "storyNode">
+
+function StoryNodeCard({ data, selected }: NodeProps<StoryFlowNode>) {
   return (
     <div
       className={cn(
@@ -98,7 +101,7 @@ function buildLayoutEdges(nodes: StoryNode[]) {
 function buildLayout(
   storyNodes: StoryNode[],
   lanes: string[]
-): { nodes: Node<StoryNodeData>[]; edges: Edge[] } {
+): { nodes: StoryFlowNode[]; edges: Edge[] } {
   const dagreGraph = new dagre.graphlib.Graph()
   dagreGraph.setDefaultEdgeLabel(() => ({}))
   dagreGraph.setGraph({
@@ -121,7 +124,7 @@ function buildLayout(
   const laneMap = new Map<string, number>()
   lanes.forEach((tag, index) => laneMap.set(tag, index))
 
-  const nodes: Node<StoryNodeData>[] = storyNodes.map((node) => {
+  const nodes: StoryFlowNode[] = storyNodes.map((node) => {
     const tag = getLocationTag(node)
     const laneIndex = laneMap.get(tag) ?? 0
     const dagreNode = dagreGraph.node(node.id)

@@ -23,8 +23,8 @@ class SentenceTransformerEmbedding:
     def __init__(self, model_name: str) -> None:
         self._model = SentenceTransformer(model_name)
 
-    def __call__(self, texts: Iterable[str]) -> list[list[float]]:
-        embeddings = self._model.encode(list(texts), normalize_embeddings=True)
+    def __call__(self, input: Iterable[str]) -> list[list[float]]:
+        embeddings = self._model.encode(list(input), normalize_embeddings=True)
         return embeddings.tolist()
 
 

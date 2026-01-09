@@ -14,11 +14,13 @@ export interface CharacterGraphNode {
   aliases?: string[]
   properties?: Record<string, unknown>
   source_refs?: string[]
+  x?: number
+  y?: number
 }
 
 export interface CharacterGraphLink {
-  source: string
-  target: string
+  source: string | CharacterGraphNode
+  target: string | CharacterGraphNode
   relation_type?: string
   relation_name?: string
   description?: string

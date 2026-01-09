@@ -11,6 +11,8 @@ type SyncPayload = { details?: { node_id?: string; request_id?: string } }
 
 export function useWebsocket(projectId: string | null) {
   const clientRef = useRef<WebSocketClient | null>(null)
+  const syncRequestIdRef = useRef<string | null>(null)
+  const selectedNodeIdRef = useRef<string | null>(null)
   const {
     addConflict,
     clearConflicts,
@@ -22,6 +24,14 @@ export function useWebsocket(projectId: string | null) {
     updateGraphFromServer,
     updateNodeFromServer,
   } = useProjectStore()
+
+  useEffect(() => {
+    syncRequestIdRef.current = syncRequestId
+  }, [syncRequestId])
+
+  useEffect(() => {
+    selectedNodeIdRef.current = selectedNodeId
+  }, [selectedNodeId])
 
   useEffect(() => {
     if (!projectId) {
@@ -62,8 +72,8 @@ export function useWebsocket(projectId: string | null) {
     const shouldHandleSync = (payload: SyncPayload) => {
       const nodeId = payload?.details?.node_id
       const requestId = payload?.details?.request_id
-      if (syncRequestId) {
-        return requestId === syncRequestId
+      if (syncRequestIdRef.current) {
+        return requestId === syncRequestIdRef.current
       }
       if (requestId) {
         return false
@@ -71,7 +81,7 @@ export function useWebsocket(projectId: string | null) {
       if (!nodeId) {
         return false
       }
-      return nodeId === selectedNodeId
+      return nodeId === selectedNodeIdRef.current
     }
 
     const unsubscribeSyncStart = client.on("sync_started", (payload) => {
@@ -110,9 +120,7 @@ export function useWebsocket(projectId: string | null) {
   }, [
     addConflict,
     clearConflicts,
-    syncRequestId,
     projectId,
-    selectedNodeId,
     setSyncRequestId,
     setSyncStatus,
     setWsStatus,

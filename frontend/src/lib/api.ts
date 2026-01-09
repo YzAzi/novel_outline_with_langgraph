@@ -12,6 +12,8 @@ import type {
   SyncNodeResponse,
   WorldDocument,
   WorldKnowledgeBase,
+  ModelConfigResponse,
+  ModelConfigUpdateRequest,
 } from "@/src/types/models"
 import type { CharacterGraphNode } from "@/src/types/character-graph"
 import { useProjectStore } from "@/src/stores/project-store"
@@ -511,6 +513,34 @@ export async function mergeGraphEntities(
     {
       method: "POST",
       body: JSON.stringify({ into_id: intoId }),
+      signal: options.signal,
+    },
+    { showLoading: false },
+  )
+}
+
+export async function getModelConfig(
+  options: { signal?: AbortSignal } = {},
+): Promise<ModelConfigResponse> {
+  return request<ModelConfigResponse>(
+    "/api/models",
+    {
+      method: "GET",
+      signal: options.signal,
+    },
+    { showLoading: false },
+  )
+}
+
+export async function updateModelConfig(
+  payload: ModelConfigUpdateRequest,
+  options: { signal?: AbortSignal } = {},
+): Promise<ModelConfigResponse> {
+  return request<ModelConfigResponse>(
+    "/api/models",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
       signal: options.signal,
     },
     { showLoading: false },

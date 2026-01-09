@@ -10,7 +10,7 @@ from langchain_openai import ChatOpenAI
 
 from langgraph.graph import END, START, StateGraph
 
-from .config import settings
+from .config import get_api_key, get_base_url, get_model_name, settings
 from .graph_extractor import GraphExtractor
 from .graph_retriever import RetrievalContext, GraphRetriever
 from .knowledge_graph import KnowledgeGraph, load_graph, save_graph
@@ -143,13 +143,14 @@ def _route_on_error(state: AgentState) -> str:
 async def drafting_node(state: AgentState) -> AgentState:
     print("[drafting_node] start")
     try:
-        if not settings.openai_api_key:
+        api_key = get_api_key("drafting")
+        if not api_key:
             raise ValidationError("OPENAI_API_KEY is not configured")
 
-        model_name = settings.model_name or "gpt-4o"
+        model_name = get_model_name("drafting")
         llm = ChatOpenAI(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
+            api_key=api_key,
+            base_url=get_base_url(),
             model=model_name,
         ).with_structured_output(StoryProject)
 
@@ -206,7 +207,8 @@ def validation_node(state: AgentState) -> AgentState:
 async def reverse_sync_node(state: AgentState) -> AgentState:
     print("[reverse_sync_node] start")
     try:
-        if not settings.openai_api_key:
+        api_key = get_api_key("sync")
+        if not api_key:
             raise ValidationError("OPENAI_API_KEY is not configured")
 
         project = state.get("current_project")
@@ -214,10 +216,10 @@ async def reverse_sync_node(state: AgentState) -> AgentState:
         if project is None or modified_node is None:
             raise ValidationError("Sync failed: missing project or modified node")
 
-        model_name = settings.model_name or "gpt-4o"
+        model_name = get_model_name("sync")
         llm = ChatOpenAI(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
+            api_key=api_key,
+            base_url=get_base_url(),
             model=model_name,
         ).with_structured_output(SyncAnalysisResult)
 

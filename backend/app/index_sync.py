@@ -56,7 +56,10 @@ class IndexSyncManager:
         result.vector_updated = True
 
         if old_node:
-            similarity = self._calculate_similarity(old_node.content, new_node.content)
+            similarity = self._calculate_similarity(
+                self._node_text(old_node),
+                self._node_text(new_node),
+            )
             if similarity > 0.95:
                 return result
 
@@ -165,7 +168,10 @@ class IndexSyncManager:
             if old_node is None:
                 significant_updates.append(new_node)
                 continue
-            similarity = self._calculate_similarity(old_node.content, new_node.content)
+            similarity = self._calculate_similarity(
+                self._node_text(old_node),
+                self._node_text(new_node),
+            )
             if similarity <= 0.95:
                 significant_updates.append(new_node)
 
@@ -195,6 +201,11 @@ class IndexSyncManager:
 
     def _calculate_similarity(self, old_text: str, new_text: str) -> float:
         return difflib.SequenceMatcher(None, old_text, new_text).ratio()
+
+    @staticmethod
+    def _node_text(node: StoryNode) -> str:
+        parts = [node.title.strip(), node.content.strip()]
+        return "\n\n".join(part for part in parts if part)
 
     def _extract_entity_mentions(
         self,

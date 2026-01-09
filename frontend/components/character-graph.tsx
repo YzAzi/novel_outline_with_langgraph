@@ -1,7 +1,12 @@
 "use client"
 
+import dynamic from "next/dynamic"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d"
+import type {
+  ForceGraphMethods,
+  LinkObject,
+  NodeObject,
+} from "react-force-graph-2d"
 
 import {
   deleteGraphEntity,
@@ -16,6 +21,10 @@ import type {
   CharacterGraphResponse,
   EntityType,
 } from "@/src/types/character-graph"
+
+const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
+  ssr: false,
+}) as unknown as typeof import("react-force-graph-2d").default
 
 const ENTITY_COLORS: Record<string, string> = {
   character: "#3b82f6",
@@ -119,7 +128,13 @@ export function CharacterGraph() {
   const [isLoading, setIsLoading] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
-  const graphRef = useRef<ForceGraphMethods | null>(null)
+  const graphRef = useRef<
+    | ForceGraphMethods<
+        NodeObject<CharacterGraphNode>,
+        LinkObject<CharacterGraphNode, CharacterGraphLink>
+      >
+    | undefined
+  >(undefined)
   const [selectedEntity, setSelectedEntity] = useState<CharacterGraphNode | null>(null)
   const [selectedRelation, setSelectedRelation] = useState<CharacterGraphLink | null>(null)
   const [contextMenu, setContextMenu] = useState<{
@@ -481,8 +496,8 @@ export function CharacterGraph() {
       if (!relation) {
         return
       }
-      const source = link.source as CharacterGraphNode & { x?: number; y?: number }
-      const target = link.target as CharacterGraphNode & { x?: number; y?: number }
+      const source = typeof link.source === "string" ? null : link.source
+      const target = typeof link.target === "string" ? null : link.target
       if (source?.x == null || source?.y == null || target?.x == null || target?.y == null) {
         return
       }
@@ -572,11 +587,15 @@ export function CharacterGraph() {
         linkDirectionalParticles={0}
         linkCanvasObject={drawLinkLabel}
         linkCanvasObjectMode={() => "after"}
-        onNodeClick={(node) => handleNodeClick(node as CharacterGraphNode)}
+        onNodeClick={(node, event) => {
+          handleNodeClick(node as CharacterGraphNode)
+          if (event.detail >= 2) {
+            handleNodeDoubleClick(node as CharacterGraphNode)
+          }
+        }}
         onNodeRightClick={(node, event) =>
           handleNodeRightClick(node as CharacterGraphNode, event)
         }
-        onNodeDoubleClick={(node) => handleNodeDoubleClick(node as CharacterGraphNode)}
         onLinkClick={(link) => handleLinkClick(link as CharacterGraphLink)}
         onBackgroundClick={handleBackgroundClick}
         cooldownTicks={100}
@@ -753,11 +772,21 @@ export function CharacterGraph() {
           </div>
           {pathRelations.length > 0 ? (
             <div className="mt-2 space-y-1 text-[11px] text-slate-600">
-              {pathRelations.map((relation, index) => (
-                <div key={`${relation.source}-${relation.target}-${index}`}>
-                  {relation.relation_name ?? relation.relation_type ?? "关系"}：{relation.source} → {relation.target}
-                </div>
-              ))}
+              {pathRelations.map((relation, index) => {
+                const sourceLabel =
+                  typeof relation.source === "string"
+                    ? relation.source
+                    : relation.source?.name ?? relation.source?.id ?? "?"
+                const targetLabel =
+                  typeof relation.target === "string"
+                    ? relation.target
+                    : relation.target?.name ?? relation.target?.id ?? "?"
+                return (
+                  <div key={`${sourceLabel}-${targetLabel}-${index}`}>
+                    {relation.relation_name ?? relation.relation_type ?? "关系"}：{sourceLabel} → {targetLabel}
+                  </div>
+                )
+              })}
             </div>
           ) : null}
         </div>
@@ -795,7 +824,14 @@ export function CharacterGraph() {
             {selectedRelation.description || "暂无描述"}
           </div>
           <div className="mt-2 text-[11px] text-slate-500">
-            关联：{selectedRelation.source} → {selectedRelation.target}
+            关联：
+            {typeof selectedRelation.source === "string"
+              ? selectedRelation.source
+              : selectedRelation.source?.name ?? selectedRelation.source?.id ?? "?"}{" "}
+            →{" "}
+            {typeof selectedRelation.target === "string"
+              ? selectedRelation.target
+              : selectedRelation.target?.name ?? selectedRelation.target?.id ?? "?"}
           </div>
         </div>
       ) : null}

@@ -11,7 +11,7 @@ from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
-from .config import settings
+from .config import get_api_key, get_base_url, get_model_name
 from .knowledge_graph import Entity, KnowledgeGraph, Relation
 from .models import StoryNode, StoryProject
 
@@ -61,13 +61,14 @@ class GraphExtractor:
     ) -> ExtractionResult:
         if not text.strip():
             return ExtractionResult()
-        if not settings.openai_api_key:
+        api_key = get_api_key("extraction")
+        if not api_key:
             return ExtractionResult()
 
-        model_name = settings.model_name or "gpt-4o"
+        model_name = get_model_name("extraction")
         llm = ChatOpenAI(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
+            api_key=api_key,
+            base_url=get_base_url(),
             model=model_name,
         ).with_structured_output(ExtractionResult)
 

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 
-import type { IndexSnapshot, SnapshotType, VersionDiff } from "@/src/types/models"
+import type { IndexSnapshot, SnapshotType, VersionDiff as VersionDiffModel } from "@/src/types/models"
 import {
   compareVersions,
   createVersion,
@@ -43,7 +43,7 @@ export function VersionHistory({ open, onClose }: VersionHistoryProps) {
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null)
   const [baseVersion, setBaseVersion] = useState<number | null>(null)
   const [snapshotCache, setSnapshotCache] = useState<Record<number, IndexSnapshot>>({})
-  const [diff, setDiff] = useState<VersionDiff | null>(null)
+  const [diff, setDiff] = useState<VersionDiffModel | null>(null)
   const [isLoading, setIsLoading] = useState(false)
 
   const loadVersions = useCallback(async () => {
