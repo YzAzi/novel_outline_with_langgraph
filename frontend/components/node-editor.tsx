@@ -318,12 +318,12 @@ export function NodeEditor() {
       </CardHeader>
       <CardContent className="space-y-4">
         {newCharacterNotice ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          <div className="rounded-xl border border-amber-200/70 bg-amber-50/70 px-3 py-2 text-xs text-amber-700">
             {newCharacterNotice}
           </div>
         ) : null}
         {validationError ? (
-          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <div className="rounded-xl border border-red-200/70 bg-red-50/70 px-3 py-2 text-xs text-red-700">
             {validationError}
           </div>
         ) : null}
@@ -333,16 +333,16 @@ export function NodeEditor() {
               const isExpanded = expandedConflict === index
               const severityClass =
                 conflict.severity === "error"
-                  ? "border-red-200 bg-red-50 text-red-700"
+                  ? "border-red-200/70 bg-red-50/70 text-red-700"
                   : conflict.severity === "warning"
-                    ? "border-amber-200 bg-amber-50 text-amber-700"
-                    : "border-blue-200 bg-blue-50 text-blue-700"
+                    ? "border-amber-200/70 bg-amber-50/70 text-amber-700"
+                    : "border-blue-200/70 bg-blue-50/70 text-blue-700"
 
               return (
                 <button
                   type="button"
                   key={conflict._id}
-                  className={`w-full rounded-md border px-3 py-2 text-left text-xs ${severityClass}`}
+                  className={`w-full rounded-xl border px-3 py-2 text-left text-xs ${severityClass}`}
                   onClick={() =>
                     setExpandedConflict(isExpanded ? null : index)
                   }

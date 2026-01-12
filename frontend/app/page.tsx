@@ -235,13 +235,13 @@ export default function Home() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-50">
-      <header className="border-b bg-white/80 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-3 px-4 py-4 lg:flex-nowrap">
+    <div className="flex min-h-screen flex-col">
+      <header className="glass-panel border-b border-white/40">
+        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-3 px-4 py-5 lg:flex-nowrap">
           <Button
             variant="ghost"
             size="icon"
-            className="h-9 w-9"
+            className="h-9 w-9 rounded-full"
             onClick={() => setDrawerOpen(true)}
           >
             ☰
@@ -423,10 +423,13 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="flex flex-1 flex-col px-4 py-6">
-        <ResizablePanelGroup direction={layoutDirection} className="mx-auto w-full max-w-6xl flex-1">
+      <main className="flex flex-1 flex-col px-4 py-6 animate-float-in">
+        <ResizablePanelGroup
+          direction={layoutDirection}
+          className="mx-auto w-full max-w-6xl flex-1"
+        >
           <ResizablePanel defaultSize={60} minSize={30}>
-            <div className="h-full pr-2">
+            <div className="h-full pr-2 lg:pr-3">
               {activeTab === "outline" ? (
                 <StoryVisualizer />
               ) : activeTab === "relations" ? (
@@ -440,7 +443,7 @@ export default function Home() {
             <>
               <ResizableHandle withHandle />
               <ResizablePanel defaultSize={40} minSize={25}>
-                <div className="h-full pl-2">
+                <div className="h-full pl-2 lg:pl-3">
                   <NodeEditor />
                 </div>
               </ResizablePanel>
@@ -450,15 +453,15 @@ export default function Home() {
       </main>
 
       {isLoading ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="rounded-full bg-white px-4 py-2 text-sm font-medium shadow">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+          <div className="rounded-full bg-white/80 px-4 py-2 text-sm font-medium shadow">
             正在生成大纲...
           </div>
         </div>
       ) : null}
 
       {error ? (
-        <div className="fixed right-4 top-4 z-50 flex items-center gap-3 rounded-lg border bg-white px-4 py-3 text-sm shadow">
+        <div className="glass-panel fixed right-4 top-4 z-50 flex items-center gap-3 rounded-2xl px-4 py-3 text-sm">
           <span className="text-red-600">{error}</span>
           <Button variant="ghost" size="sm" onClick={() => setError(null)}>
             关闭
@@ -472,12 +475,12 @@ export default function Home() {
       {drawerOpen ? (
         <div className="fixed inset-0 z-40">
           <div
-            className="absolute inset-0 bg-black/40"
+            className="absolute inset-0 bg-slate-900/35 backdrop-blur-sm"
             onClick={() => setDrawerOpen(false)}
           />
-          <aside className="absolute left-0 top-0 h-full w-80 bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b px-4 py-3">
-              <div className="text-sm font-semibold">项目列表</div>
+          <aside className="absolute left-0 top-0 h-full w-80 border-r border-white/60 bg-white/80 shadow-xl backdrop-blur-xl">
+            <div className="flex items-center justify-between border-b border-white/50 px-4 py-3">
+              <div className="text-sm font-semibold text-slate-800">项目列表</div>
               <Button
                 variant="ghost"
                 size="sm"

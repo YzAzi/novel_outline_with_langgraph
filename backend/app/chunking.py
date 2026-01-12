@@ -22,7 +22,7 @@ class ChunkingStrategy(Enum):
 class ChunkConfig:
     strategy: ChunkingStrategy
     chunk_size: int = 500
-    chunk_overlap: int = 50
+    chunk_overlap: int = 100
     separators: list[str] | None = None
 
 

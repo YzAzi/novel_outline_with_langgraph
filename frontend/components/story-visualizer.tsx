@@ -22,14 +22,14 @@ const NODE_WIDTH = 220
 const NODE_HEIGHT = 120
 const LANE_HEIGHT = 180
 const TAG_COLORS = [
-  "bg-amber-100 text-amber-900",
-  "bg-sky-100 text-sky-900",
-  "bg-emerald-100 text-emerald-900",
-  "bg-rose-100 text-rose-900",
-  "bg-lime-100 text-lime-900",
-  "bg-orange-100 text-orange-900",
-  "bg-teal-100 text-teal-900",
-  "bg-fuchsia-100 text-fuchsia-900",
+  "bg-amber-100/80 text-amber-900",
+  "bg-sky-100/80 text-sky-900",
+  "bg-emerald-100/80 text-emerald-900",
+  "bg-rose-100/80 text-rose-900",
+  "bg-lime-100/80 text-lime-900",
+  "bg-orange-100/80 text-orange-900",
+  "bg-teal-100/80 text-teal-900",
+  "bg-fuchsia-100/80 text-fuchsia-900",
 ]
 
 const defaultEdgeOptions = { type: "smoothstep", animated: false }
@@ -47,12 +47,12 @@ function StoryNodeCard({ data, selected }: NodeProps<StoryFlowNode>) {
   return (
     <div
       className={cn(
-        "w-[220px] rounded-lg border bg-white p-3 shadow-sm transition",
+        "w-[220px] rounded-xl border border-white/70 bg-white/80 p-3 shadow-sm backdrop-blur transition",
         selected
-          ? "ring-2 ring-blue-500"
+          ? "ring-2 ring-primary/60"
           : data.highlight
-            ? "ring-2 ring-amber-400"
-            : "hover:border-slate-300"
+            ? "ring-2 ring-amber-300"
+            : "hover:border-slate-300/70"
       )}
     >
       <div className="mb-2 text-sm font-semibold text-slate-900">{data.title}</div>
@@ -196,15 +196,15 @@ export function StoryVisualizer() {
 
   if (!currentProject) {
     return (
-      <div className="flex h-full items-center justify-center rounded-xl border border-dashed bg-white text-sm text-muted-foreground">
+      <div className="surface-card flex h-full items-center justify-center border-dashed text-sm text-muted-foreground">
         先创建大纲以查看节点布局。
       </div>
     )
   }
 
   return (
-    <div className="flex h-full overflow-hidden rounded-xl border bg-white">
-      <div className="flex w-[140px] shrink-0 flex-col border-r bg-slate-50">
+    <div className="surface-card flex h-full overflow-hidden">
+      <div className="flex w-[140px] shrink-0 flex-col border-r border-white/60 bg-white/60">
         <div className="px-3 py-3 text-xs font-semibold text-slate-500">场景泳道</div>
         <div className="flex flex-1 flex-col">
           {lanes.map((lane, index) => (
